@@ -74,18 +74,18 @@ def main():
     os.makedirs(udir)
 
     log("1/3 抽帧 ...")
-    run([FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video, "-vsync", "0",
-         "-start_number", "0", os.path.join(fdir, "%05d.png")])
-    n = len(os.listdir(fdir))
     fps, has_audio, src_dur = probe(video)
+    # fps 滤镜归一化：VFR 源不会变速
+    run([FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video,
+         "-vf", f"fps={fps:g}", "-start_number", "0", os.path.join(fdir, "%05d.png")])
+    n = len(os.listdir(fdir))
     import cv2
     h = cv2.imread(os.path.join(fdir, "00000.png"), cv2.IMREAD_GRAYSCALE).shape[0]
     if a.denoise is None:
         a.denoise = 3 if h < 720 else 0
     log(f"    {n} 帧, 高 {h}, {fps:g} fps, 音轨 {'有' if has_audio else '无'}, denoise={a.denoise}")
-    if src_dur and abs(n / fps - src_dur) > max(0.3, 0.05 * src_dur):
-        log(f"    [警告] 帧数({n})与时长({src_dur:.2f}s @ {fps:g}fps)对不上，"
-            f"源可能是可变帧率/已丢帧，输出会按 {n / fps:.2f}s 生成")
+    if src_dur and abs(n / fps - src_dur) > max(0.5, 0.05 * src_dur):
+        log(f"    [警告] 抽帧 {n} 张 ≈ {n / fps:.2f}s，与源时长 {src_dur:.2f}s 不一致")
 
     log(f"2/3 Real-CUGAN 放大 {a.scale}x（denoise={a.denoise}, {a.model}）...")
     t = time.time()

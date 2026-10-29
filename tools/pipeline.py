@@ -7,6 +7,7 @@
 可选: --denoise -1|0|1|2|3  --out  --keep
 """
 import argparse
+import atexit
 import os
 import shutil
 import subprocess
@@ -54,6 +55,7 @@ def main():
     out_dir = os.path.dirname(video)
     final = a.out or os.path.join(out_dir, f"{name}_无水印_{a.scale}x.mp4")
     job = tempfile.mkdtemp(prefix="ppline_")
+    atexit.register(lambda: None if (a.keep or not os.path.isdir(job)) else shutil.rmtree(job, ignore_errors=True))
     clean = os.path.join(job, "clean.mp4")   # 中间文件用 crf 0（无损），不吃画质
     t0 = time.time()
 

@@ -8,6 +8,7 @@
 可选: --out --padding 0.45 --subvideo 40 --neighbor 10 --crf 17 --keep
 """
 import argparse
+import atexit
 import json
 import os
 import re
@@ -25,6 +26,22 @@ from common import ROOT as _ROOT, find_ffmpeg
 REPO = str(_ROOT)
 PY = sys.executable
 FFMPEG = find_ffmpeg()
+
+_STATE = {"job": None, "keep": False, "ok": False}
+
+
+def _on_exit():
+    """成功就删临时目录；失败则保留并打印路径，方便排查。"""
+    job = _STATE["job"]
+    if not job:
+        return
+    if _STATE["ok"] and not _STATE["keep"]:
+        shutil.rmtree(job, ignore_errors=True)
+    elif not _STATE["ok"] and os.path.isdir(job):
+        print(f"[提示] 任务中断，中间文件保留在 {job}（确认后可整体删除）", file=sys.stderr)
+
+
+atexit.register(_on_exit)
 
 
 def log(msg):
@@ -295,21 +312,27 @@ def main():
     t0 = time.time()
 
     job = tempfile.mkdtemp(prefix="ppwm_")
+    _STATE["job"], _STATE["keep"] = job, a.keep
     frames_dir = os.path.join(job, "frames")
     final_dir = os.path.join(job, "final")
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(final_dir, exist_ok=True)
 
     log("1/5 抽帧 ...")
-    run([FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video, "-vsync", "0",
-         "-start_number", "0", "-y", os.path.join(frames_dir, "%05d.png")])
+    fps, has_audio, src_dur = probe(video)
+    # 用 fps 滤镜归一化成恒定帧率：VFR 源不会让输出时长跑偏
+    run([FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video,
+         "-vf", f"fps={fps:g}", "-start_number", "0", "-y",
+         os.path.join(frames_dir, "%05d.png")])
     files = sorted(os.listdir(frames_dir))
     n = len(files)
     frames = [os.path.join(frames_dir, f) for f in files]
     first = cv2.imread(frames[0])
     H, W = first.shape[:2]
-    fps, has_audio, src_dur = probe(video)
     log(f"    {n} 帧, {W}x{H}, {fps:g} fps, 音轨: {'有' if has_audio else '无'}")
+    if src_dur and abs(n / fps - src_dur) > max(0.5, 0.05 * src_dur):
+        log(f"    [警告] 抽帧 {n} 张 ≈ {n / fps:.2f}s，与源时长 {src_dur:.2f}s 不一致，"
+            f"输出可能会变速")
 
     # ---- 确定要处理的片段 ----
     if a.auto:
@@ -330,17 +353,21 @@ def main():
         log(f"2/5 手动矩形 ({box[0]},{box[1]}) {box[2]}x{box[3]}")
     else:
         seg = {"f0": 0, "f1": n - 1, "frames": list(range(n)), "boxes": {}}
+        mdir = os.path.join(job, "masks_in")
+        os.makedirs(mdir, exist_ok=True)
         if os.path.isdir(a.mask):
             names = sorted(os.listdir(a.mask))
             if len(names) != n:
                 raise SystemExit(f"掩码数量({len(names)}) != 帧数({n})")
-            seg["mask_dir"] = a.mask
             ux = uy = ux1 = uy1 = None
-            for i, nm in enumerate(sorted(names)):
+            for i, nm in enumerate(names):
                 m = cv2.imread(os.path.join(a.mask, nm), 0)
+                if m is None:
+                    raise SystemExit(f"读不到掩码: {nm}")
                 if m.shape[:2] != (H, W):
                     m = cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST)
-                    cv2.imwrite(os.path.join(a.mask, nm), m)
+                # 写进临时目录，绝不改动用户的掩码文件
+                cv2.imwrite(os.path.join(mdir, f"{i:05d}.png"), m)
                 ys, xs = np.nonzero(m > 10)
                 if len(xs) == 0:
                     continue
@@ -350,6 +377,8 @@ def main():
                 uy = y0_ if uy is None else min(uy, y0_)
                 ux1 = x1_ if ux1 is None else max(ux1, x1_)
                 uy1 = y1_ if uy1 is None else max(uy1, y1_)
+            if ux is None:
+                raise SystemExit("掩码里没有任何白色区域（全黑）")
             box = (ux, uy, ux1 - ux + 1, uy1 - uy + 1)
         else:
             m = cv2.imread(a.mask, cv2.IMREAD_GRAYSCALE)
@@ -361,10 +390,9 @@ def main():
             if len(xs) == 0:
                 raise SystemExit("掩码是空的")
             box = (int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
-            seg["mask_dir"] = os.path.join(job, "masks_single")
-            os.makedirs(seg["mask_dir"], exist_ok=True)
             for i in range(n):
-                cv2.imwrite(os.path.join(seg["mask_dir"], f"{i:05d}.png"), m)
+                cv2.imwrite(os.path.join(mdir, f"{i:05d}.png"), m)
+        seg["mask_dir"] = mdir
         seg["boxes"] = {i: box for i in range(n)}
         segs = [seg]
         log(f"2/5 掩码范围 ({box[0]},{box[1]}) {box[2]}x{box[3]}")
@@ -380,8 +408,7 @@ def main():
         log(f"预览图: {keep_dir}")
         if a.keep:
             log(f"中间文件: {job}")
-        else:
-            shutil.rmtree(job, ignore_errors=True)
+        _STATE["ok"] = True
         return
 
     log("3/5 ProPainter 推理 ...")
@@ -407,6 +434,9 @@ def main():
                 img[y0:y0 + ch, x0:x0 + cw] = blend
         cv2.imwrite(os.path.join(final_dir, f"{i:05d}.png"), img)
 
+    got = len(os.listdir(final_dir))
+    if got != n:
+        raise SystemExit(f"贴回帧数不足：{got}/{n}，可能是磁盘满或读帧失败")
     log("5/5 编码 ...")
     cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
            "-framerate", f"{fps:g}", "-i", os.path.join(final_dir, "%05d.png"), "-i", video,
@@ -426,8 +456,7 @@ def main():
 
     if a.keep:
         log(f"    中间文件: {job}")
-    else:
-        shutil.rmtree(job, ignore_errors=True)
+    _STATE["ok"] = True
     log(f"完成: {out}  ({os.path.getsize(out) / 1048576:.1f} MB, 总用时 {time.time() - t0:.0f}s)")
 
 

@@ -140,3 +140,4 @@ out/
 outputs/
 inputs/
 *.log
+tools/python/

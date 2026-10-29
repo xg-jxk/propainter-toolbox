@@ -66,16 +66,3 @@ def probe(video):
     d = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", info)
     dur = (int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))) if d else None
     return fps, ("Audio:" in info), dur
-
-
-def check_env(need_cugan=False):
-    """启动前检查依赖，给出人话错误。"""
-    if not (ROOT / "inference_propainter.py").is_file():
-        raise SystemExit(f"目录不完整：{ROOT} 下找不到 inference_propainter.py")
-    if need_cugan and not CUGAN_EXE.is_file():
-        raise SystemExit(f"缺少 Real-CUGAN：{CUGAN_EXE}\n请先运行 setup.cmd（或手动解压到 tools/realcugan）")
-    try:
-        import torch  # noqa: F401
-    except Exception:
-        raise SystemExit("当前 Python 里没有 torch，请用 .venv 里的解释器运行，或先执行 setup.cmd")
-    find_ffmpeg()
