@@ -31,6 +31,17 @@ foreach ($cand in @("py -3.12", "py -3.11", "py -3.10", "python")) {
         }
     } catch {}
 }
+if (-not $py) {
+    # 兜底：常见安装位置
+    $cands = @()
+    $cands += Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe" -ErrorAction SilentlyContinue
+    $cands += Get-ChildItem "C:\Python3*\python.exe" -ErrorAction SilentlyContinue
+    $cands += Get-ChildItem "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue
+    foreach ($c in $cands) {
+        $v = & $c.FullName -c "import sys;print(sys.version_info[1])" 2>$null
+        if ($LASTEXITCODE -eq 0 -and [int]$v -ge 9 -and [int]$v -le 12) { $py = "`"$($c.FullName)`""; break }
+    }
+}
 if (-not $py) { throw "没找到 Python 3.9~3.12，请先安装：https://www.python.org/downloads/" }
 $verLine = & cmd /c "$py -V"
 Say "使用 $verLine"
