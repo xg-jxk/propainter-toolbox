@@ -370,6 +370,12 @@ Say "日志已保存：$LogPath"
     if (Test-Path -LiteralPath $tmp) {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
+    # 被 Ctrl+C 打断时可能留下 .part，下次运行前顺手清掉
+    $wdirTmp = Join-Path $Root "weights"
+    if (Test-Path -LiteralPath $wdirTmp) {
+        Get-ChildItem -LiteralPath $wdirTmp -Filter "*.part" -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
     Stop-Log
 }
 
