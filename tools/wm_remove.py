@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
 """ProPainter 去水印：自动检测 / 手动矩形 / 掩码 三种模式
 
-  python wm_remove.py --video "D:\\v\\a.mp4" --auto              # 自动找水印
-  python wm_remove.py --video "D:\\v\\a.mp4" --auto --dry-run    # 只检测 + 出预览图
+  python wm_remove.py --video "D:\\v\\a.mp4"                      # 自动找水印
+  python wm_remove.py --video "D:\\v\\a.mp4" --dry-run            # 只检测 + 出预览图（秒级）
   python wm_remove.py --video "D:\\v\\a.mp4" --rect 1314,918,320,120
   python wm_remove.py --video "D:\\v\\a.mp4" --mask "D:\\v\\masks"
-可选: --out --padding 0.45 --subvideo 40 --neighbor 10 --crf 17 --keep
+可选: --out --padding 0.45 --subvideo 40 --neighbor 10 --ref-stride 12
+      --mask-dilation 2 --crf 17 --encoder auto|nvenc|x264
+      --workdir --log-file --detect-thr 0.62 --keep
 """
 import argparse
 import atexit
-import json
 import os
-import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -21,50 +20,51 @@ import time
 import cv2
 import numpy as np
 
-from common import ROOT as _ROOT, find_ffmpeg
+from common import (ROOT as _ROOT, ensure_out_writable, encode_frames,
+                    dir_size, find_ffmpeg, human_size, log, probe, run,
+                    set_log_file)
 
 REPO = str(_ROOT)
 PY = sys.executable
-FFMPEG = find_ffmpeg()
+
+# 自动检测的默认参数。换平台（半透明 logo / 彩色角标）时优先调这里或命令行，
+# 不要把魔法数字再写回函数体。
+DETECT = {
+    "white": 185,        # 灰度阈值：大于它算"浅色"
+    "sat": 60,           # HSV 饱和度上限：小于它算"白/灰"
+    "min_w": 0.10,       # 候选宽（相对画面宽）
+    "max_w": 0.55,
+    "min_h": 0.025,
+    "max_h": 0.22,
+    "aspect": (2.0, 10.0),   # 文字类水印（"WATERMARK"、@昵称）天然是长条，6.0 太严
+    "corner": 0.25,      # 中心必须落在最外 25% 的四角
+    "fill": (0.03, 0.60),
+    "edge": 0.01,
+    "close": 13,         # 形态学闭运算核：把同一行文字里分开的字符合成一个候选
+    "thr": 0.62,         # 逐帧模板匹配置信度阈值
+    "samples": 40,       # 自动检测最多采样多少帧
+}
 
 _STATE = {"job": None, "keep": False, "ok": False}
 
 
 def _on_exit():
-    """成功就删临时目录；失败则保留并打印路径，方便排查。"""
+    """成功就删临时目录；失败则保留并打印路径与体积，方便排查。"""
     job = _STATE["job"]
     if not job:
         return
     if _STATE["ok"] and not _STATE["keep"]:
         shutil.rmtree(job, ignore_errors=True)
     elif not _STATE["ok"] and os.path.isdir(job):
-        print(f"[提示] 任务中断，中间文件保留在 {job}（确认后可整体删除）", file=sys.stderr)
+        try:
+            size = human_size(dir_size(job))
+        except Exception:
+            size = "未知大小"
+        print("[提示] 任务中断，中间文件保留在 %s（%s，确认后可整体删除）" % (job, size),
+              file=sys.stderr)
 
 
 atexit.register(_on_exit)
-
-
-def log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
-
-
-def run(cmd, cwd=None, env=None):
-    p = subprocess.run(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, text=True, errors="ignore")
-    if p.returncode != 0:
-        sys.stderr.write(p.stdout[-3000:] + "\n" + p.stderr[-3000:])
-        raise SystemExit(f"命令失败: {cmd[0]}")
-    return p
-
-
-def probe(video):
-    p = subprocess.run([FFMPEG, "-hide_banner", "-i", video],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       text=True, errors="ignore")
-    m = re.search(r"(\d+(?:\.\d+)?) fps", p.stderr)
-    d = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", p.stderr)
-    dur = (int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))) if d else None
-    return (float(m.group(1)) if m else 30.0), ("Audio:" in p.stderr), dur
 
 
 # --------------------------------------------------------------- 几何工具
@@ -96,28 +96,34 @@ def union_box(boxes):
 
 # --------------------------------------------------------------- 自动检测
 
-def _candidates(gray, bgr, W, H):
+def _candidates(gray, bgr, W, H, cfg=None):
+    cfg = cfg or DETECT
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    white = ((gray > 185) & (hsv[..., 1] < 60)).astype(np.uint8) * 255
-    white = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    white = ((gray > cfg["white"]) & (hsv[..., 1] < cfg["sat"])).astype(np.uint8) * 255
+    raw = white.copy()
+    k = int(cfg.get("close", 13))
+    white = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
     cnts, _ = cv2.findContours(white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     edges = cv2.Canny(gray, 80, 160)
     out = []
     for c in cnts:
         x, y, w, h = cv2.boundingRect(c)
-        if not (0.10 * W <= w <= 0.55 * W and 0.025 * H <= h <= 0.22 * H):
+        if not (cfg["min_w"] * W <= w <= cfg["max_w"] * W and cfg["min_h"] * H <= h <= cfg["max_h"] * H):
             continue
-        if not (2.0 <= w / max(h, 1) <= 6.0):
+        if not (cfg["aspect"][0] <= w / max(h, 1) <= cfg["aspect"][1]):
             continue
         # 角标一般贴在四角：要求中心落在最外 25% 的区域
         cx, cy = x + w / 2.0, y + h / 2.0
-        if not ((cx < 0.25 * W or cx > 0.75 * W) and (cy < 0.25 * H or cy > 0.75 * H)):
+        if not ((cx < cfg["corner"] * W or cx > (1 - cfg["corner"]) * W) and
+                (cy < cfg["corner"] * H or cy > (1 - cfg["corner"]) * H)):
             continue
-        fill = (white[y:y + h, x:x + w] > 0).mean()
-        if not (0.03 <= fill <= 0.60):      # 实心大块 = 画面内容，不是文字角标
+        # 填充率必须基于"闭运算之前"的掩码来算：闭运算会把字间空隙填上，
+        # 用闭运算后的掩码算，粗体文字会被误判成"实心大块"
+        fill = (raw[y:y + h, x:x + w] > 0).mean()
+        if not (cfg["fill"][0] <= fill <= cfg["fill"][1]):   # 实心大块 = 画面内容
             continue
         # 文字/描边角标内部有明显的边缘；平滑的高光/皮肤没有
-        if (edges[y:y + h, x:x + w] > 0).mean() < 0.01:
+        if (edges[y:y + h, x:x + w] > 0).mean() < cfg["edge"]:
             continue
         out.append((x, y, w, h))
     return out
@@ -138,18 +144,21 @@ def _cluster(cands, tol):
     return groups
 
 
-def _match_all(frames, tpl, W, H, rx0, ry0, log_):
+def _match_all(frames, tpl, W, H, rx0, ry0, log_=log):
     scales = [0.88, 0.92, 0.96, 1.0, 1.04, 1.08, 1.12]
     res, prev = [], None
     for i, f in enumerate(frames):
         g = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            res.append((-1.0, 0, 0, 0, 0))
+            continue
 
         def search(x0, y0, x1, y1):
             roi = g[y0:y1, x0:x1]
             best = (-1.0, x0, y0, tpl.shape[1], tpl.shape[0])
             for s in scales:
                 tw, th = int(round(tpl.shape[1] * s)), int(round(tpl.shape[0] * s))
-                if tw >= roi.shape[1] or th >= roi.shape[0]:
+                if tw > roi.shape[1] or th > roi.shape[0]:
                     continue
                 r = cv2.matchTemplate(roi, cv2.resize(tpl, (tw, th)), cv2.TM_CCOEFF_NORMED)
                 _, mx, _, ml = cv2.minMaxLoc(r)
@@ -163,50 +172,63 @@ def _match_all(frames, tpl, W, H, rx0, ry0, log_):
             b = search(max(rx0, px - m), max(ry0, py - m),
                        min(W, px + pw + m), min(H, py + ph + m))
             if b[0] < 0.45:
-                b = search(rx0, ry0, W, H)
+                # 跟丢时全图重找：注意从 (0,0) 开始，否则水印漂到画面另一侧会永远搜不到
+                b = search(0, 0, W, H)
         else:
             b = search(rx0, ry0, W, H)
         res.append(b)
         prev = b[1:]
         if i and i % 120 == 0:
-            log_(f"    匹配 {i}/{len(frames)}  score={b[0]:.2f}")
+            log_("    匹配 %d/%d  score=%.2f" % (i, len(frames), b[0]))
     return res
 
 
-def auto_detect(frames, W, H, out_dir, thr=0.62, log_=log):
-    step = max(1, len(frames) // 40)
+def auto_detect(frames, W, H, out_dir, thr=None, log_=log, cfg=None):
+    cfg = cfg or DETECT
+    thr = cfg["thr"] if thr is None else thr
+    step = max(1, len(frames) // max(1, cfg["samples"]))
     samples = list(range(0, len(frames), step))
 
     cands = []
     for i in samples:
         bgr = cv2.imread(frames[i])
-        for b in _candidates(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bgr, W, H):
+        if bgr is None:
+            continue
+        for b in _candidates(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bgr, W, H, cfg):
             cands.append((i, b))
     if not cands:
-        log_("    没找到白色角标候选，请改用 --rect 指定位置")
+        log_("   没找到白色角标候选：可试 --detect-fill 0.85 / --detect-aspect 9，"
+             "或直接用 --rect x,y,w,h")
         return []
 
     groups = _cluster(cands, tol=int(0.02 * W))
     groups.sort(key=lambda g: len(g["items"]), reverse=True)
     main = groups[0]
     if len(main["items"]) < max(3, int(0.15 * len(samples))):
-        log_(f"    候选不稳定（{len(main['items'])}/{len(samples)} 帧），请改用 --rect")
+        log_("    候选不稳定（%d/%d 帧），请改用 --rect" % (len(main["items"]), len(samples)))
         return []
     bx, by, bw, bh = main["box"]
-    log_(f"    初定位 ({bx},{by}) {bw}x{bh}，命中 {len(main['items'])}/{len(samples)} 帧")
+    log_("    初定位 (%d,%d) %dx%d，命中 %d/%d 帧" % (bx, by, bw, bh, len(main["items"]), len(samples)))
 
     best_i, best_sharp = main["items"][0][0], -1.0
     for i, _ in main["items"]:
-        v = cv2.Laplacian(cv2.imread(frames[i], 0)[by:by + bh, bx:bx + bw], cv2.CV_64F).var()
+        img = cv2.imread(frames[i], 0)
+        if img is None:
+            continue
+        v = cv2.Laplacian(img[by:by + bh, bx:bx + bw], cv2.CV_64F).var()
         if v > best_sharp:
             best_sharp, best_i = v, i
-    tpl = cv2.imread(frames[best_i], 0)[by:by + bh, bx:bx + bw]
-    log_(f"    模板取第 {best_i} 帧（清晰度 {best_sharp:.0f}），开始逐帧跟踪")
+    tpl_img = cv2.imread(frames[best_i], 0)
+    if tpl_img is None:
+        log_("    模板帧读取失败，请改用 --rect")
+        return []
+    tpl = tpl_img[by:by + bh, bx:bx + bw]
+    log_("    模板取第 %d 帧（清晰度 %.0f），开始逐帧跟踪" % (best_i, best_sharp))
 
     rx0, ry0 = max(0, bx - int(1.2 * bw)), max(0, by - int(1.2 * bh))
     raw = _match_all(frames, tpl, W, H, rx0, ry0, log_)
 
-    boxes = {i: (x, y, w, h) for i, (sc, x, y, w, h) in enumerate(raw) if sc >= thr}
+    boxes = {i: (x, y, w, h) for i, (sc, x, y, w, h) in enumerate(raw) if sc >= thr and w > 0}
     for i in list(boxes):
         if sum(1 for k in range(i - 3, i + 4) if k in boxes and k != i) < 2:
             boxes.pop(i)
@@ -214,14 +236,15 @@ def auto_detect(frames, W, H, out_dir, thr=0.62, log_=log):
         log_("    跟踪没有稳定命中，请改用 --rect")
         return []
 
-    segs, cur, prevx = [], [], None
+    segs, cur, prev = [], [], None
     for i in sorted(boxes):
-        x = boxes[i][0]
-        if prevx is not None and abs(x - prevx) > int(0.04 * W):
+        x, y = boxes[i][0], boxes[i][1]
+        # x、y 同时判断：水印上下移动时不切段，union 框会被拉高、裁剪区域变大
+        if prev is not None and (abs(x - prev[0]) > int(0.04 * W) or abs(y - prev[1]) > int(0.04 * H)):
             segs.append(cur)
             cur = []
         cur.append(i)
-        prevx = x
+        prev = (x, y)
     if cur:
         segs.append(cur)
 
@@ -236,10 +259,14 @@ def auto_detect(frames, W, H, out_dir, thr=0.62, log_=log):
         for k, seg in enumerate(out):
             i = seg["frames"][len(seg["frames"]) // 2]
             img = cv2.imread(frames[i])
+            if img is None:
+                continue
             x, y, w, h = seg["boxes"][i]
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 3)
-            cv2.putText(img, f"seg{k} f{i}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 255, 0), 3)
-            cv2.imwrite(os.path.join(out_dir, f"detect_seg{k}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cv2.putText(img, "seg%d f%d" % (k, i), (20, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.4, (0, 255, 0), 3)
+            cv2.imwrite(os.path.join(out_dir, "detect_seg%d.jpg" % k), img,
+                        [cv2.IMWRITE_JPEG_QUALITY, 90])
     return out
 
 
@@ -247,20 +274,28 @@ def auto_detect(frames, W, H, out_dir, thr=0.62, log_=log):
 
 def process_segment(seg, idx, frames_dir, W, H, job, args):
     x0, y0, cw, ch = crop_geom(union_box(seg["boxes"].values()), W, H, args.padding)
-    seg_dir = os.path.join(job, f"seg{idx}")
+    seg_dir = os.path.join(job, "seg%d" % idx)
     crops, masks = os.path.join(seg_dir, "crops"), os.path.join(seg_dir, "masks")
     os.makedirs(crops, exist_ok=True)
     os.makedirs(masks, exist_ok=True)
-    log(f"    seg{idx}: 帧 {seg['f0']}-{seg['f1']}，裁剪 ({x0},{y0}) {cw}x{ch}")
+    log("    seg%d: 帧 %d-%d，裁剪 (%d,%d) %dx%d" % (idx, seg["f0"], seg["f1"], x0, y0, cw, ch))
 
     for k, i in enumerate(seg["frames"]):
-        img = cv2.imread(os.path.join(frames_dir, f"{i:05d}.png"))
-        cv2.imwrite(os.path.join(crops, f"{k:05d}.png"), img[y0:y0 + ch, x0:x0 + cw])
+        src_path = os.path.join(frames_dir, "%05d.png" % i)
+        img = cv2.imread(src_path)
+        if img is None:
+            raise SystemExit("读帧失败: %s（磁盘满或抽帧不完整）" % src_path)
+        cv2.imwrite(os.path.join(crops, "%05d.png" % k), img[y0:y0 + ch, x0:x0 + cw])
         m = np.zeros((ch, cw), np.uint8)
         if seg.get("mask_dir"):
-            src = cv2.imread(os.path.join(seg["mask_dir"], f"{i:05d}.png"), 0)
-            if src.shape[:2] == (H, W):
-                m = src[y0:y0 + ch, x0:x0 + cw]
+            mask_path = os.path.join(seg["mask_dir"], "%05d.png" % i)
+            src = cv2.imread(mask_path, 0)
+            if src is None:
+                raise SystemExit("读不到掩码: %s" % mask_path)
+            if src.shape[:2] != (H, W):
+                raise SystemExit("掩码尺寸不对: %s 是 %dx%d，视频是 %dx%d"
+                                 % (mask_path, src.shape[1], src.shape[0], W, H))
+            m = src[y0:y0 + ch, x0:x0 + cw]
         else:
             bx, by, bw, bh = seg["boxes"][i]
             g = 4
@@ -268,106 +303,217 @@ def process_segment(seg, idx, frames_dir, W, H, job, args):
             mx1 = min(cw, bx - x0 + bw + g)
             my1 = min(ch, by - y0 + bh + g)
             m[my0:my1, mx0:mx1] = 255
-        cv2.imwrite(os.path.join(masks, f"{k:05d}.png"), m)
+        cv2.imwrite(os.path.join(masks, "%05d.png" % k), m)
 
     env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
     t = time.time()
     run([PY, "inference_propainter.py", "--video", crops, "--mask", masks,
          "--output", os.path.join(seg_dir, "out"), "--save_frames", "--fp16",
          "--subvideo_length", str(args.subvideo), "--neighbor_length", str(args.neighbor),
-         "--ref_stride", "12", "--mask_dilation", "2"], cwd=REPO, env=env)
-    log(f"    seg{idx} 推理完成 {time.time() - t:.0f}s "
-        f"({(time.time() - t) / max(1, len(seg['frames'])):.2f}s/帧)")
+         "--ref_stride", str(args.ref_stride), "--mask_dilation", str(args.mask_dilation)],
+        cwd=REPO, env=env)
+    dt = time.time() - t
+    log("    seg%d 推理完成 %.0fs（%.2fs/帧）" % (idx, dt, dt / max(1, len(seg["frames"]))))
 
     res_dir = os.path.join(seg_dir, "out", "crops", "frames")
     return {"x0": x0, "y0": y0, "cw": cw, "ch": ch, "masks": masks, "res": res_dir}
 
 
+# --------------------------------------------------------------- dry-run
+
+def _sample_times(dur, n):
+    if not dur or dur <= 0:
+        return [0.0]
+    step = float(dur) / (n + 1)
+    return [step * (k + 1) for k in range(n)]
+
+
+def _detect_cfg(args):
+    """把命令行的检测参数合进 DETECT 默认值。"""
+    cfg = dict(DETECT)
+    fill_max = getattr(args, "detect_fill", None)
+    if fill_max:
+        cfg["fill"] = (DETECT["fill"][0], float(fill_max))
+    aspect_max = getattr(args, "detect_aspect", None)
+    if aspect_max:
+        cfg["aspect"] = (DETECT["aspect"][0], float(aspect_max))
+    return cfg
+
+
+def dry_run_preview(video, args, name, fps, dur):
+    """只抽十几张采样帧做检测，秒级出预览；不再为看几张图抽整片。"""
+    job = _STATE["job"]
+    log("dry-run：只抽采样帧做检测，不处理整片 ...")
+    if args.mask:
+        log("  --mask 模式的 dry-run 未实现（掩码本身已指明位置），请直接跑正式流程。")
+        return
+
+    times = _sample_times(dur, 12)
+    paths = []
+    for k, t in enumerate(times):
+        p = os.path.join(job, "s%02d.png" % k)
+        run([find_ffmpeg(), "-hide_banner", "-loglevel", "error",
+             "-ss", "%.3f" % t, "-i", video, "-frames:v", "1", "-y", p])
+        if os.path.isfile(p):
+            paths.append(p)
+    if not paths:
+        raise SystemExit("采样抽帧失败：可能是视频损坏或 ffmpeg 不支持该封装")
+
+    first = cv2.imread(paths[0])
+    if first is None:
+        raise SystemExit("采样帧读取失败: %s" % paths[0])
+    H, W = first.shape[:2]
+
+    found = []
+    if args.rect:
+        box = tuple(int(v) for v in args.rect.replace("，", ",").split(","))
+        if len(box) != 4:
+            raise SystemExit("--rect 格式应为 x,y,w,h")
+        found.append((box, len(paths)))
+        for k, p in enumerate(paths):
+            im = cv2.imread(p)
+            if im is None:
+                continue
+            x, y, w, h = box
+            cv2.rectangle(im, (x, y), (x + w, y + h), (0, 0, 255), 3)
+            cv2.imwrite(os.path.join(job, "detect_rect_%02d.jpg" % k), im,
+                        [cv2.IMWRITE_JPEG_QUALITY, 90])
+    else:
+        segs = auto_detect(paths, W, H, job, thr=args.detect_thr, cfg=_detect_cfg(args))
+        if not segs:
+            log("  没检测到稳定的水印，请改用 --rect x,y,w,h（坐标可用截图工具量）")
+        for s in segs:
+            found.append((union_box(s["boxes"].values()), len(s["frames"])))
+
+    keep_dir = os.path.join(os.path.dirname(video),
+                            "%s_detect_%s" % (name, time.strftime("%Y%m%d_%H%M%S")))
+    ensure_out_writable(os.path.join(keep_dir, "probe.tmp"))
+    os.makedirs(keep_dir, exist_ok=True)
+    copied = 0
+    for f in sorted(os.listdir(job)):
+        if f.startswith("detect_"):
+            shutil.copy2(os.path.join(job, f), keep_dir)
+            copied += 1
+    log("  预览图 %d 张：%s" % (copied, keep_dir))
+    for box, cnt in found:
+        log("  检测框 (%d,%d) %dx%d（采样命中 %d 帧）" % (box[0], box[1], box[2], box[3], cnt))
+
+
+# --------------------------------------------------------------- 主流程
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
-    ap.add_argument("--auto", action="store_true")
-    ap.add_argument("--rect")
-    ap.add_argument("--mask")
+    ap.add_argument("--auto", action="store_true", help="自动检测水印位置")
+    ap.add_argument("--rect", help="手动矩形 x,y,w,h")
+    ap.add_argument("--mask", help="掩码文件或掩码目录")
     ap.add_argument("--out")
     ap.add_argument("--padding", type=float, default=0.45)
     ap.add_argument("--subvideo", type=int, default=40)
     ap.add_argument("--neighbor", type=int, default=10)
+    ap.add_argument("--ref-stride", type=int, default=12, dest="ref_stride")
+    ap.add_argument("--mask-dilation", type=int, default=2, dest="mask_dilation")
     ap.add_argument("--crf", type=int, default=17)
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--encoder", default="auto", choices=["auto", "x264", "nvenc"])
+    ap.add_argument("--preset", default=None, help="x264 预设，默认 slow")
+    ap.add_argument("--detect-thr", type=float, default=DETECT["thr"], dest="detect_thr")
+    ap.add_argument("--detect-fill", type=float, default=None, dest="detect_fill",
+                    help="白色填充率上限，默认 0.60；文字水印偏密时可试 0.85")
+    ap.add_argument("--detect-aspect", type=float, default=None, dest="detect_aspect",
+                    help="候选宽高比上限，默认 6.0；长条文字水印可试 9")
+    ap.add_argument("--dry-run", action="store_true", dest="dry_run")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--workdir", help="临时目录位置（默认系统临时目录；建议指到大盘）")
+    ap.add_argument("--log-file", dest="log_file")
     a = ap.parse_args()
+
+    if a.log_file:
+        set_log_file(a.log_file)
 
     video = os.path.abspath(a.video)
     if not os.path.isfile(video):
-        raise SystemExit(f"找不到视频: {video}")
+        raise SystemExit("找不到视频: %s" % video)
     if not (a.auto or a.rect or a.mask):
         raise SystemExit("请指定 --auto 或 --rect x,y,w,h 或 --mask")
-    for p in (PY, FFMPEG, os.path.join(REPO, "inference_propainter.py")):
+    if not (0.0 <= a.padding <= 2.0):
+        raise SystemExit("--padding 应在 0~2 之间")
+    for p in (PY, find_ffmpeg(), os.path.join(REPO, "inference_propainter.py")):
         if not os.path.isfile(p):
-            raise SystemExit(f"缺少依赖: {p}")
+            raise SystemExit("缺少依赖: %s" % p)
 
     name = os.path.splitext(os.path.basename(video))[0]
     out = a.out or os.path.join(os.path.dirname(video), name + "_无水印.mp4")
+    # 提前验证可写，避免跑完一小时才在编码那步失败
+    ensure_out_writable(out)
     t0 = time.time()
 
-    job = tempfile.mkdtemp(prefix="ppwm_")
+    if a.workdir:
+        os.makedirs(a.workdir, exist_ok=True)
+    job = tempfile.mkdtemp(prefix="ppwm_", dir=a.workdir or None)
     _STATE["job"], _STATE["keep"] = job, a.keep
     frames_dir = os.path.join(job, "frames")
     final_dir = os.path.join(job, "final")
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(final_dir, exist_ok=True)
 
-    log("1/5 抽帧 ...")
     fps, has_audio, src_dur = probe(video)
+    if not (5.0 <= fps <= 240.0):
+        raise SystemExit("读不到合理的帧率（%s），请确认源文件是否完整" % fps)
+
+    if a.dry_run:
+        dry_run_preview(video, a, name, fps, src_dur)
+        _STATE["ok"] = True
+        log("dry-run 完成（未处理整片）")
+        return
+
+    log("1/5 抽帧 ...")
     # 用 fps 滤镜归一化成恒定帧率：VFR 源不会让输出时长跑偏
-    run([FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video,
-         "-vf", f"fps={fps:g}", "-start_number", "0", "-y",
+    run([find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", video,
+         "-vf", "fps=%g" % fps, "-start_number", "0", "-y",
          os.path.join(frames_dir, "%05d.png")])
     files = sorted(os.listdir(frames_dir))
     n = len(files)
+    if n == 0:
+        raise SystemExit("抽帧结果为空：磁盘满或 ffmpeg 解码失败")
     frames = [os.path.join(frames_dir, f) for f in files]
     first = cv2.imread(frames[0])
+    if first is None:
+        raise SystemExit("读不到抽出的第一帧: %s" % frames[0])
     H, W = first.shape[:2]
-    log(f"    {n} 帧, {W}x{H}, {fps:g} fps, 音轨: {'有' if has_audio else '无'}")
+    log("    %d 帧, %dx%d, %g fps, 音轨: %s" % (n, W, H, fps, "有" if has_audio else "无"))
     if src_dur and abs(n / fps - src_dur) > max(0.5, 0.05 * src_dur):
-        log(f"    [警告] 抽帧 {n} 张 ≈ {n / fps:.2f}s，与源时长 {src_dur:.2f}s 不一致，"
-            f"输出可能会变速")
+        log("    [警告] 抽帧 %d 张 ≈ %.2fs，与源时长 %.2fs 不一致，输出可能会变速"
+            % (n, n / fps, src_dur))
 
-    # ---- 确定要处理的片段 ----
-    if a.auto:
-        log("2/5 自动检测水印 ...")
-        segs = auto_detect(frames, W, H, job)
-        if not segs:
-            shutil.rmtree(job, ignore_errors=True)
-            raise SystemExit("自动检测失败，请用 --rect x,y,w,h 手动指定")
-        for k, s in enumerate(segs):
-            bx, by, bw, bh = union_box(s["boxes"].values())
-            log(f"    片段{k}: 帧 {s['f0']}-{s['f1']}（{len(s['frames'])} 帧），水印框约 ({bx},{by}) {bw}x{bh}")
-    elif a.rect:
+    # ---- 确定要处理的片段（显式的 --rect / --mask 优先于 --auto）----
+    if a.rect:
         box = tuple(int(v) for v in a.rect.replace("，", ",").split(","))
         if len(box) != 4:
             raise SystemExit("--rect 格式应为 x,y,w,h")
+        if box[2] <= 0 or box[3] <= 0:
+            raise SystemExit("--rect 的宽高必须大于 0")
         segs = [{"f0": 0, "f1": n - 1, "frames": list(range(n)),
                  "boxes": {i: box for i in range(n)}}]
-        log(f"2/5 手动矩形 ({box[0]},{box[1]}) {box[2]}x{box[3]}")
-    else:
+        log("2/5 手动矩形 (%d,%d) %dx%d" % (box[0], box[1], box[2], box[3]))
+    elif a.mask:
         seg = {"f0": 0, "f1": n - 1, "frames": list(range(n)), "boxes": {}}
         mdir = os.path.join(job, "masks_in")
         os.makedirs(mdir, exist_ok=True)
         if os.path.isdir(a.mask):
             names = sorted(os.listdir(a.mask))
             if len(names) != n:
-                raise SystemExit(f"掩码数量({len(names)}) != 帧数({n})")
+                raise SystemExit("掩码数量(%d) != 帧数(%d)" % (len(names), n))
             ux = uy = ux1 = uy1 = None
             for i, nm in enumerate(names):
-                m = cv2.imread(os.path.join(a.mask, nm), 0)
+                mpath = os.path.join(a.mask, nm)
+                m = cv2.imread(mpath, 0)
                 if m is None:
-                    raise SystemExit(f"读不到掩码: {nm}")
+                    raise SystemExit("读不到掩码: %s" % mpath)
                 if m.shape[:2] != (H, W):
-                    m = cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST)
+                    raise SystemExit("掩码尺寸不对: %s 是 %dx%d，视频是 %dx%d"
+                                     % (mpath, m.shape[1], m.shape[0], W, H))
                 # 写进临时目录，绝不改动用户的掩码文件
-                cv2.imwrite(os.path.join(mdir, f"{i:05d}.png"), m)
+                cv2.imwrite(os.path.join(mdir, "%05d.png" % i), m)
                 ys, xs = np.nonzero(m > 10)
                 if len(xs) == 0:
                     continue
@@ -383,33 +529,32 @@ def main():
         else:
             m = cv2.imread(a.mask, cv2.IMREAD_GRAYSCALE)
             if m is None:
-                raise SystemExit(f"读不到掩码: {a.mask}")
+                raise SystemExit("读不到掩码: %s" % a.mask)
             if m.shape[:2] != (H, W):
-                m = cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST)
+                raise SystemExit("掩码尺寸不对: %s 是 %dx%d，视频是 %dx%d"
+                                 % (a.mask, m.shape[1], m.shape[0], W, H))
             ys, xs = np.nonzero(m > 10)
             if len(xs) == 0:
                 raise SystemExit("掩码是空的")
-            box = (int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
+            box = (int(xs.min()), int(ys.min()),
+                   int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
             for i in range(n):
-                cv2.imwrite(os.path.join(mdir, f"{i:05d}.png"), m)
+                cv2.imwrite(os.path.join(mdir, "%05d.png" % i), m)
         seg["mask_dir"] = mdir
         seg["boxes"] = {i: box for i in range(n)}
         segs = [seg]
-        log(f"2/5 掩码范围 ({box[0]},{box[1]}) {box[2]}x{box[3]}")
-
-    if a.dry_run:
-        log("dry-run：检测预览已写入临时目录")
-        keep_dir = os.path.join(os.path.dirname(video), name + "_detect")
-        shutil.rmtree(keep_dir, ignore_errors=True)
-        os.makedirs(keep_dir, exist_ok=True)
-        for f in os.listdir(job):
-            if f.startswith("detect_"):
-                shutil.copy2(os.path.join(job, f), keep_dir)
-        log(f"预览图: {keep_dir}")
-        if a.keep:
-            log(f"中间文件: {job}")
-        _STATE["ok"] = True
-        return
+        log("2/5 掩码范围 (%d,%d) %dx%d" % (box[0], box[1], box[2], box[3]))
+    else:
+        log("2/5 自动检测水印 ...")
+        segs = auto_detect(frames, W, H, job, thr=a.detect_thr, cfg=_detect_cfg(a))
+        if not segs:
+            shutil.rmtree(job, ignore_errors=True)
+            _STATE["job"] = None
+            raise SystemExit("自动检测失败，请用 --rect x,y,w,h 手动指定（可先 --dry-run 看预览）")
+        for k, s in enumerate(segs):
+            bx, by, bw, bh = union_box(s["boxes"].values())
+            log("    片段%d: 帧 %d-%d（%d 帧），水印框约 (%d,%d) %dx%d"
+                % (k, s["f0"], s["f1"], len(s["frames"]), bx, by, bw, bh))
 
     log("3/5 ProPainter 推理 ...")
     metas = [process_segment(s, k, frames_dir, W, H, job, a) for k, s in enumerate(segs)]
@@ -421,45 +566,43 @@ def main():
             frame_to_seg[i] = (k, j)
     for i in range(n):
         img = cv2.imread(frames[i])
+        if img is None:
+            raise SystemExit("读帧失败: %s" % frames[i])
         if i in frame_to_seg:
             k, j = frame_to_seg[i]
             m = metas[k]
-            res = cv2.imread(os.path.join(m["res"], f"{j:04d}.png"))
+            res = cv2.imread(os.path.join(m["res"], "%04d.png" % j))
             if res is not None:
-                mm = cv2.imread(os.path.join(m["masks"], f"{j:05d}.png"), 0)
+                mask_path = os.path.join(m["masks"], "%05d.png" % j)
+                mm = cv2.imread(mask_path, 0)
+                if mm is None:
+                    raise SystemExit("读不到掩码: %s" % mask_path)
                 alpha = cv2.GaussianBlur(mm.astype(np.float32) / 255.0, (0, 0), 2.0)[..., None]
                 x0, y0, cw, ch = m["x0"], m["y0"], m["cw"], m["ch"]
                 src = img[y0:y0 + ch, x0:x0 + cw]
-                blend = (res.astype(np.float32) * alpha + src.astype(np.float32) * (1 - alpha)).astype(np.uint8)
-                img[y0:y0 + ch, x0:x0 + cw] = blend
-        cv2.imwrite(os.path.join(final_dir, f"{i:05d}.png"), img)
+                if res.shape[:2] != src.shape[:2]:
+                    res = cv2.resize(res, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_CUBIC)
+                blend = (res.astype(np.float32) * alpha + src.astype(np.float32) * (1 - alpha))
+                img[y0:y0 + ch, x0:x0 + cw] = np.clip(blend, 0, 255).astype(np.uint8)
+        cv2.imwrite(os.path.join(final_dir, "%05d.png" % i), img)
 
     got = len(os.listdir(final_dir))
     if got != n:
-        raise SystemExit(f"贴回帧数不足：{got}/{n}，可能是磁盘满或读帧失败")
+        raise SystemExit("贴回帧数不足：%d/%d，可能是磁盘满或读帧失败" % (got, n))
     log("5/5 编码 ...")
-    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-           "-framerate", f"{fps:g}", "-i", os.path.join(final_dir, "%05d.png"), "-i", video,
-           "-map", "0:v:0"]
-    if has_audio:
-        cmd += ["-map", "1:a:0"]
-    cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", str(a.crf),
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
-    if has_audio:
-        # 用 -t 精确截到视频时长；-shortest 在音轨时间戳异常的片源上会截掉视频帧
-        cmd += ["-c:a", "copy", "-t", f"{n / fps:.3f}"]
-    cmd += [out]
-    run(cmd)
+    encode_frames(final_dir, video, out, fps, n, has_audio,
+                  encoder=a.encoder, crf=a.crf, preset=a.preset)
+
     dur_out = probe(out)[2]
     if dur_out and abs(dur_out - n / fps) > 0.3:
-        log(f"    [警告] 输出时长 {dur_out:.2f}s != 预期 {n / fps:.2f}s")
+        log("    [警告] 输出时长 %.2fs != 预期 %.2fs" % (dur_out, n / fps))
 
     if a.keep:
-        log(f"    中间文件: {job}")
+        log("    中间文件: %s" % job)
     _STATE["ok"] = True
-    log(f"完成: {out}  ({os.path.getsize(out) / 1048576:.1f} MB, 总用时 {time.time() - t0:.0f}s)")
+    log("完成: %s  (%s, 总用时 %.0fs)"
+        % (out, human_size(os.path.getsize(out)), time.time() - t0))
 
 
 if __name__ == "__main__":
     main()
-

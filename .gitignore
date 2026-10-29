@@ -140,4 +140,6 @@ out/
 outputs/
 inputs/
 *.log
+*.part
 tools/python/
+setup.log

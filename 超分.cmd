@@ -1,12 +1,10 @@
 @echo off
 chcp 65001 >nul
 setlocal
-set PYTHONIOENCODING=utf-8
-set PYTHONUTF8=1
-set "PY=%~dp0.venv\Scripts\python.exe"
+call "%~dp0env.cmd"
 
 if not exist "%PY%" (
-  echo  [!] .venv not found. Run setup.cmd first.
+  echo  [!] 找不到 .venv，请先双击 setup.cmd 安装。
   pause
   exit /b 1
 )
@@ -15,16 +13,22 @@ if "%~1"=="" goto usage
 set "SC=%~2"
 if "%SC%"=="" set "SC=2"
 
-"%PY%" "%~dp0tools\sr_upscale.py" --video "%~1" --scale %SC%
+"%PY%" "%~dp0tools\sr_upscale.py" --video "%~1" --scale %SC% %3 %4 %5 %6 %7 %8 %9
+set "RC=%ERRORLEVEL%"
 echo.
+if not "%RC%"=="0" echo  [X] 处理失败，退出码 %RC%。加 --log-file "D:\pp.log" 可把日志存下来。
 pause
-exit /b
+exit /b %RC%
 
 :usage
 echo.
 echo  Usage:
-echo     sr-upscale.cmd "D:\video\a.mp4"       2x
-echo     sr-upscale.cmd "D:\video\a.mp4" 3     3x
+echo     sr-upscale.cmd "D:\video\a.mp4"            2x
+echo     sr-upscale.cmd "D:\video\a.mp4" 3          3x
+echo     sr-upscale.cmd "D:\video\a.mp4" 2 --denoise 0 --encoder nvenc
+echo.
+echo  其它可透传的参数: --denoise -1^|0^|1^|2^|3  --model  --crf  --preset
+echo                    --encoder  --workdir  --log-file  --keep
 echo.
 pause
-exit /b
+exit /b 1

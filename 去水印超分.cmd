@@ -1,12 +1,10 @@
 @echo off
 chcp 65001 >nul
 setlocal
-set PYTHONIOENCODING=utf-8
-set PYTHONUTF8=1
-set "PY=%~dp0.venv\Scripts\python.exe"
+call "%~dp0env.cmd"
 
 if not exist "%PY%" (
-  echo  [!] .venv not found. Run setup.cmd first.
+  echo  [!] 找不到 .venv，请先双击 setup.cmd 安装。
   pause
   exit /b 1
 )
@@ -18,16 +16,22 @@ if "%SC%"=="" set "SC=2"
 echo.
 echo  step 1: remove watermark    step 2: upscale %SC%x
 echo.
-"%PY%" "%~dp0tools\pipeline.py" --video "%~1" --scale %SC%
+"%PY%" "%~dp0tools\pipeline.py" --video "%~1" --scale %SC% %3 %4 %5 %6 %7 %8 %9
+set "RC=%ERRORLEVEL%"
 echo.
+if not "%RC%"=="0" echo  [X] 处理失败，退出码 %RC%。加 --log-file "D:\pp.log" 可把日志存下来。
 pause
-exit /b
+exit /b %RC%
 
 :usage
 echo.
 echo  Usage:
-echo     wm-and-upscale.cmd "D:\video\a.mp4"        remove watermark + 2x
-echo     wm-and-upscale.cmd "D:\video\a.mp4" 3      remove watermark + 3x
+echo     wm-and-upscale.cmd "D:\video\a.mp4"                     remove watermark + 2x
+echo     wm-and-upscale.cmd "D:\video\a.mp4" 3                   3x
+echo     wm-and-upscale.cmd "D:\video\a.mp4" 2 --rect 1314,918,320,120
+echo.
+echo  其它可透传的参数: --rect  --denoise  --padding  --crf  --intermediate-crf
+echo                    --encoder  --workdir  --log-file  --keep
 echo.
 pause
-exit /b
+exit /b 1

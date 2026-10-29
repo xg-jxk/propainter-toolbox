@@ -1,3 +1,7 @@
+# 说明：torch / torchvision 故意不写在这里。
+# setup.ps1 会按显卡情况从 download.pytorch.org 选 cu121 或 cpu 版本安装；
+# 若这里也列出 torch，手动 pip install -r 会把 PyPI 的 CPU 版装上去，
+# 覆盖掉 CUDA 版，之后推理会突然慢几十倍。
 av
 addict
 einops
@@ -7,8 +11,6 @@ scipy
 opencv-python
 matplotlib
 scikit-image
-torch>=1.7.1
-torchvision>=0.8.2
 imageio-ffmpeg
 pyyaml
 requests
