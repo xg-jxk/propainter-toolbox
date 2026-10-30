@@ -153,8 +153,11 @@ def _match_all(frames, tpl, W, H, rx0, ry0, emit=None):
     return res
 
 
-def auto_detect(frames, W, H, out_dir=None, thr=None, cfg=None, emit=None):
-    """返回 [{"f0","f1","frames":[i...],"boxes":{i:(x,y,w,h)}}]。"""
+def auto_detect(frames, W, H, out_dir=None, thr=None, cfg=None, emit=None, info=None):
+    """返回 [{"f0","f1","frames":[i...],"boxes":{i:(x,y,w,h)}}]。
+
+    info: 可选的 dict，失败时回填 {"box": (x,y,w,h), "hits": n, "samples": m}
+    """
     cfg = cfg or DETECT
     thr = cfg["thr"] if thr is None else thr
     step = max(1, len(frames) // max(1, cfg["samples"]))
@@ -168,15 +171,20 @@ def auto_detect(frames, W, H, out_dir=None, thr=None, cfg=None, emit=None):
         for b in _candidates(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bgr, W, H, cfg):
             cands.append((i, b))
     if not cands:
-        _log(emit, "   没找到白色角标候选：可试 --detect-fill 0.85 / --detect-aspect 9，"
-                   "或直接用 --rect x,y,w,h")
+        _log(emit, "   没找到浅色角标候选：可试 --detect-fill 0.85 / --detect-aspect 9，"
+                   "或在界面里改用手动矩形 / 逐帧掩码")
         return []
 
     groups = _cluster(cands, tol=int(0.02 * W))
     groups.sort(key=lambda g: len(g["items"]), reverse=True)
     main = groups[0]
     if len(main["items"]) < max(3, int(0.15 * len(samples))):
-        _log(emit, "   候选不稳定（%d/%d 帧），请改用 --rect" % (len(main["items"]), len(samples)))
+        bx, by, bw, bh = main["box"]
+        if info is not None:
+            info.update({"box": main["box"], "hits": len(main["items"]),
+                         "samples": len(samples)})
+        _log(emit, "   候选不稳定（%d/%d 帧），疑似位置 (%d,%d) %dx%d"
+                   % (len(main["items"]), len(samples), bx, by, bw, bh))
         return []
     bx, by, bw, bh = main["box"]
     _log(emit, "   初定位 (%d,%d) %dx%d，命中 %d/%d 帧"

@@ -282,11 +282,22 @@ def run_repair(video, opts, emit, out=None, final=True):
             emit.log("掩码范围 (%d,%d) %dx%d" % box)
         else:
             emit.stage("自动定位区域", PCT_DETECT[0])
+            info = {}
             segs = D.auto_detect(frames, W, H, job, thr=opts.detect_thr,
-                                 cfg=_detect_cfg(opts), emit=emit)
+                                 cfg=_detect_cfg(opts), emit=emit, info=info)
             if not segs:
-                raise JobError("自动检测失败", "用「手动矩形」指定目标位置，"
-                                              "或先用 --dry-run 看预览图")
+                box = info.get("box")
+                if box:
+                    bx, by, bw, bh = box
+                    raise JobError(
+                        "自动定位失败：只在 %d/%d 帧看到疑似目标，不够稳定"
+                        % (info.get("hits", 0), info.get("samples", 0)),
+                        "把「定位方式」改成「手动矩形」，填入 %d,%d,%d,%d 即可；"
+                        "或用「逐帧掩码」" % (bx, by, bw, bh))
+                raise JobError(
+                    "自动检测失败：这个视频里没找到稳定的角标 / 文字",
+                    "请改用「手动矩形」框住要处理的区域，或选「逐帧掩码」；"
+                    "命令行可加 --dry-run 先看预览图")
             for k, s in enumerate(segs):
                 bx, by, bw, bh = D.union_box(s["boxes"].values())
                 emit.log("片段%d：帧 %d-%d（%d 帧），目标框约 (%d,%d) %dx%d"

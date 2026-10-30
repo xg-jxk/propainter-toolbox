@@ -244,6 +244,15 @@ class AppSmokeTest(unittest.TestCase):
         self.assertTrue(bubble.bubble().isVisible(), "Leave 后立刻隐藏了（会闪）")
         bubble.hide_bubble()
         win.close()
+    def test_bridge_decodes_bytearray(self):
+        """readAllStandardOutput() 返回 QByteArray，曾经被当成文件对象调用 .readAll()。"""
+        from PySide6.QtCore import QByteArray
+        from app.core.bridge import JobRunner
+
+        self.assertEqual(JobRunner._decode(b'{"t":"log"}'), '{"t":"log"}')
+        self.assertEqual(JobRunner._decode(QByteArray('中文'.encode("utf-8"))), "中文")
+        # 非 UTF-8（GBK）时回退，不应抛异常
+        self.assertEqual(JobRunner._decode(QByteArray("错误".encode("gbk"))), "错误")
 
 if __name__ == "__main__":
     unittest.main()

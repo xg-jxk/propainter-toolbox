@@ -76,15 +76,24 @@ class JobRunner(QObject):
         self._proc.kill()
 
     # ---------------------------------------------------------- 事件
-    def _read(self, stream, encoding="utf-8"):
-        data = bytes(stream.readAll())
+    @staticmethod
+    def _decode(data, encoding="utf-8"):
+        """QByteArray → str。原来误把 QByteArray 当文件对象调 .readAll()，
+        每次读都抛 AttributeError，导致 runner 的日志/错误根本进不了界面。"""
         try:
-            return data.decode(encoding)
+            raw = bytes(data)
+        except Exception:
+            try:
+                raw = bytes(data.data())
+            except Exception:
+                return ""
+        try:
+            return raw.decode(encoding)
         except UnicodeDecodeError:
-            return data.decode("gbk", "replace")
+            return raw.decode("gbk", "replace")
 
     def _on_stdout(self):
-        self._buf += self._read(self._proc.readAllStandardOutput())
+        self._buf += self._decode(self._proc.readAllStandardOutput())
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
             line = line.strip()
@@ -92,7 +101,7 @@ class JobRunner(QObject):
                 self._dispatch(line)
 
     def _on_stderr(self):
-        text = self._read(self._proc.readAllStandardError()).strip()
+        text = self._decode(self._proc.readAllStandardError()).strip()
         if text:
             self.logLine.emit(text)
 
@@ -126,12 +135,21 @@ class JobRunner(QObject):
             self._cancelled = True
 
     def _on_finished(self, code, _status):
+        # Windows 上 finished 可能早于最后一次 readyReadStandardOutput，
+        # 不先把残留读干净，最后那条 error 事件就会丢（界面只剩「失败」）
+        try:
+            self._on_stdout()
+            self._on_stderr()
+        except Exception:
+            pass
         self._cleanup()
         payload = dict(self._result or {})
         if self._error:
             payload.setdefault("msg", self._error.get("msg"))
             payload.setdefault("hint", self._error.get("hint"))
         payload["code"] = code
+        if code not in (0, 3) and not payload.get("msg"):
+            payload["msg"] = "任务进程异常退出（退出码 %d），详见日志" % code
         if self._cancelled or code == 3:
             state = "cancelled"
         elif code == 0:
