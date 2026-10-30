@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
                                QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
+from pplib.const import MAX_OUTPUT_LONG
 from pplib.options import default_out
 
 from .help import attach, checkbox_with_info, label_with_info
@@ -59,39 +60,43 @@ def _k_label(width, height):
 
 
 
-#: 分辨率档位：(键, 目标高度)。0 表示"最高"，即模型上限 4x
-TARGETS = [("1080p", "1080p", 1080), ("2K", "2K", 1440), ("4K", "4K", 2160),
-           ("8K", "8K", 4320), ("max", "最高", 0)]
-
-
-def target_label(key):
-    for k, label, _h in TARGETS:
-        if k == key:
-            return label
-    return key
+#: 分辨率档位：(键, 显示名, 目标长边)。0 表示"最高"，按源自适应到 8K 为止
+TARGETS = [("1080p", "1080p", 1920), ("2K", "2K", 2560), ("4K", "4K", 3840),
+           ("8K", "8K", 7680), ("max", "最高", 0)]
 SCALES = (2, 3, 4)
 
 
-def pick_scale(src_h, target_h):
-    """目标高度 → 实际倍率。返回 (scale, status)。
+def target_label(key):
+    for k, label, _long in TARGETS:
+        if k == key:
+            return label
+    return key
 
-    status: max 最高档 / ok 正好命中 / up 会超出目标 / capped 4x 也到不了 /
-            unreachable 源已经达到或超过目标（最小 2x 也没意义）/ unknown 未知源
+
+def pick_scale(src_w, src_h, target_long):
+    """按长边算倍率，且保证输出长边不超过 8K。返回 (scale, status)。
+
+    status: unknown 无源 / unreachable 源已达目标 / ok 正好 / up 超出目标 /
+            capped 4x 也到不了 / capped8k 被 8K 上限截住 / max 最高 / max8k 最高但受 8K 限制 /
+            too_big 源已超 8K
     """
-    if not target_h:
-        return 4, "max"
-    if not src_h:
+    if not (src_w and src_h):
         return 2, "unknown"
-    need = float(target_h) / float(src_h)
+    long_side = max(int(src_w), int(src_h))
+    allowed = [s for s in SCALES if long_side * s <= MAX_OUTPUT_LONG]
+    if not allowed:
+        return 0, "too_big"
+    if not target_long:
+        s = max(allowed)
+        return s, ("max" if s == 4 else "max8k")
+    need = float(target_long) / float(long_side)
     if need < 2 - 1e-6:
         return 2, "unreachable"
-    if need > 4 + 1e-6:
-        return 4, "capped"
-    for s in SCALES:
-        out = src_h * s
-        if out >= target_h - 0.5:
-            return s, ("ok" if abs(out - target_h) <= 1 else "up")
-    return 4, "capped"
+    for s in allowed:
+        if long_side * s >= target_long - 0.5:
+            return s, ("ok" if abs(long_side * s - target_long) <= 1 else "up")
+    s = max(allowed)
+    return s, ("capped" if s == 4 else "capped8k")
 
 
 def _spin(lo, hi, val, suffix=""):
@@ -218,17 +223,17 @@ class RepairPanel(ModuleCard):
 
 
 class SRPanel(ModuleCard):
-    """超分：目标分辨率 + 降噪 + 高级（模型）。"""
+    """超分：目标分辨率（长边）+ 降噪 + 高级（模型）。"""
 
     def __init__(self, parent=None, enabled=False):
         super().__init__("超分（Real-CUGAN）", "scale", checked=enabled, parent=parent)
         g = self.grid
 
         self.target = QComboBox()
-        self.target.setMinimumWidth(280)
+        self.target.setMinimumWidth(300)
         g.addWidget(label_with_info("目标分辨率", "scale"), 0, 0)
         g.addWidget(attach(self.target, "scale"), 0, 1, 1, 3)
-        self.scale_hint = QLabel("加入视频后按源尺寸自动换算倍率")
+        self.scale_hint = QLabel("加入视频后按源长度自动换算倍率")
         self.scale_hint.setObjectName("hintLabel")
         self.scale_hint.setWordWrap(True)
         g.addWidget(self.scale_hint, 1, 0, 1, 4)
@@ -250,7 +255,6 @@ class SRPanel(ModuleCard):
 
     # ---------------------------------------------------------- 档位
     def set_source_size(self, width, height):
-        """源尺寸变化时重建档位（不可达的变灰）。"""
         self._src_w, self._src_h = int(width or 0), int(height or 0)
         self._rebuild()
 
@@ -258,9 +262,9 @@ class SRPanel(ModuleCard):
         data = self.target.currentData()
         return data[0] if data else self._target_key
 
-    def target_height(self):
+    def target_long(self):
         data = self.target.currentData()
-        return int(data[1]) if data else 2160
+        return int(data[1]) if data else 3840
 
     def set_target(self, key):
         for i in range(self.target.count()):
@@ -273,7 +277,6 @@ class SRPanel(ModuleCard):
                 self._target_key = key
                 self._refresh_hint()
                 return
-        # 指定档位不可达（或不存在）→ 退到最高档
         for i in range(self.target.count() - 1, -1, -1):
             item = self.target.model().item(i)
             if item is not None and item.isEnabled():
@@ -286,24 +289,32 @@ class SRPanel(ModuleCard):
         self._target_key = self.target_key()
         self._refresh_hint()
 
-    def _item_text(self, key, target_h):
+    def _item_text(self, key, target_long):
         label = target_label(key)
-        if not self._src_h:
-            if not target_h:
-                return "最高 · 4x（模型上限）"
+        if not (self._src_w and self._src_h):
+            if not target_long:
+                return "最高 · 按源自适应（上限 8K）"
             return "%s · 加入视频后显示实际尺寸" % label
-        s, status = pick_scale(self._src_h, target_h)
+        scale, status = pick_scale(self._src_w, self._src_h, target_long)
+        if status == "too_big":
+            return "%s · 源已是 8K 长边，无法再放大" % label
         if status == "unreachable":
-            return "%s · 源 %dp，最小 2x 已是 %dp" % (label, self._src_h, self._src_h * 2)
-        ow, oh = self._src_w * s, self._src_h * s
-        text = "%s · %dx · %d×%d" % (label, s, ow, oh)
+            return "%s · 源长边 %d，最小 2x 已超目标" % (
+                label, max(self._src_w, self._src_h))
+        long_side = max(self._src_w, self._src_h)
+        ow, oh = self._src_w * scale, self._src_h * scale
+        text = "%s · %dx · %d×%d" % (label, scale, ow, oh)
         if status == "up":
             text += "（超出目标）"
         elif status == "capped":
             text += "（模型上限）"
+        elif status == "capped8k":
+            text += "（8K 上限）"
+        elif status == "max8k":
+            text += "（8K 上限，非 4x）"
         elif status == "max":
             text += "（最高）"
-        if ow > 4096 or oh > 4096:
+        if max(ow, oh) > 4096:
             text += "  CPU 编码"
         return text
 
@@ -312,10 +323,10 @@ class SRPanel(ModuleCard):
         blocked = self.target.blockSignals(True)
         self.target.clear()
         enabled_keys = []
-        for key, _label, target_h in TARGETS:
-            _, status = pick_scale(self._src_h, target_h)
-            enabled = status not in ("unreachable",)
-            self.target.addItem(self._item_text(key, target_h), (key, target_h))
+        for key, _label, target_long in TARGETS:
+            _, status = pick_scale(self._src_w, self._src_h, target_long)
+            enabled = status not in ("unreachable", "too_big")
+            self.target.addItem(self._item_text(key, target_long), (key, target_long))
             item = self.target.model().item(self.target.count() - 1)
             if item is not None:
                 item.setEnabled(enabled)
@@ -334,32 +345,41 @@ class SRPanel(ModuleCard):
 
     # ---------------------------------------------------------- 提示
     def _refresh_hint(self):
-        if not self._src_h:
-            self.scale_hint.setText("加入视频后按源尺寸自动换算倍率")
+        if not (self._src_w and self._src_h):
+            self.scale_hint.setText("加入视频后按源长度自动换算倍率（上限 8K）")
             return
         key = self.target_key()
-        target_h = self.target_height()
-        s, status = pick_scale(self._src_h, target_h)
-        ow, oh = self._src_w * s, self._src_h * s
+        scale, status = pick_scale(self._src_w, self._src_h, self.target_long())
+        if status == "too_big":
+            self.scale_hint.setText("源已是 8K 长边，超分已无意义，勾掉「超分」即可")
+            return
+        ow, oh = self._src_w * scale, self._src_h * scale
         txt = "源 %d×%d → %s 用 %dx · %d×%d（%s）" % (
-            self._src_w, self._src_h, target_label(key), s, ow, oh, _k_label(ow, oh))
+            self._src_w, self._src_h, target_label(key), scale, ow, oh, _k_label(ow, oh))
         if status == "up":
             txt += " · 该源无法精确命中，取上一档"
         elif status == "capped":
             txt += " · 4x 已是模型上限，达不到 %s" % target_label(key)
+        elif status == "capped8k":
+            txt += " · 再放大就超 8K，已按上限截住"
+        elif status == "max8k":
+            txt += " · 4x 会超 8K，最高只到 %dx" % scale
         elif status == "max":
             txt += " · 模型支持的最高倍率"
-        if ow > 4096 or oh > 4096:
+        if max(ow, oh) > 4096:
             txt += " · 超 4096，自动用 CPU 编码"
         self.scale_hint.setText(txt)
 
     # ---------------------------------------------------------- 取值
-    def options(self, src_h=None):
-        height = self._src_h if src_h is None else int(src_h or 0)
-        scale, _status = pick_scale(height, self.target_height())
+    def options(self, src_w=None, src_h=None):
+        w = self._src_w if src_w is None else int(src_w or 0)
+        h = self._src_h if src_h is None else int(src_h or 0)
+        scale, status = pick_scale(w, h, self.target_long())
+        if status == "too_big":
+            scale = 0
         denoise = self.denoise.currentData()
         return {
-            "scale": scale,
+            "scale": max(2, int(scale or 2)),
             "denoise": None if denoise == "auto" else int(denoise),
             "model": self.model.currentData(),
             "crf": 17,

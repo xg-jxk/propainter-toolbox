@@ -32,3 +32,6 @@ def normalize_inputs(paths, limit=MAX_QUEUE):
         seen.add(key)
         accepted.append(p)
     return accepted, rejected
+
+#: 输出长边上限（8K 7680×4320）；超过就没必要也没法处理了
+MAX_OUTPUT_LONG = 7680

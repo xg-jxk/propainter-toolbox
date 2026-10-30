@@ -10,6 +10,7 @@ import time
 import cv2
 
 from .events import Cancelled, JobError
+from .const import MAX_OUTPUT_LONG
 from .ffmpeg import (CUGAN_DIR, CUGAN_EXE, dir_size, encode_frames,
                      ensure_out_writable, extract_frames, human_size, probe,
                      run_stream)
@@ -113,6 +114,28 @@ def resolve_model(available, wanted, scale, denoise, emit=None):
         % ("/".join(str(s) for s in scale_list) if scale_list else "无"))
 
 
+
+def clamp_scale(width, height, scale, limit=None):
+    """按 8K 上限收紧倍率。返回 (实际倍率, 是否被收紧)。
+
+    limit 默认 MAX_OUTPUT_LONG（长边 7680）；源本身已超限时返回 (0, True)。
+    """
+    limit = MAX_OUTPUT_LONG if limit is None else int(limit)
+    long_side = max(int(width or 0), int(height or 0))
+    if long_side <= 0:
+        return int(scale), False
+    if long_side > limit:
+        return 0, True
+    allowed = 4
+    while allowed > 1 and long_side * allowed > limit:
+        allowed -= 1
+    if allowed < 2:
+        return 0, True
+    if int(scale) > allowed:
+        return allowed, True
+    return int(scale), False
+
+
 def run_sr(video, opts, emit, out=None, final=True):
     video = os.path.abspath(video)
     if not os.path.isfile(video):
@@ -152,13 +175,23 @@ def run_sr(video, opts, emit, out=None, final=True):
         first = cv2.imread(os.path.join(fdir, "00000.png"), cv2.IMREAD_GRAYSCALE)
         if first is None:
             raise JobError("读不到抽出的第一帧")
-        h = first.shape[0]
+        h, w = first.shape[0], first.shape[1]
+        # 8K 上限：即使 CLI 传了过大的倍率，也不能放出超 8K 的输出
+        long_side = max(w, h)
+        scale_use, capped = clamp_scale(w, h, opts.scale)
+        if scale_use <= 0:
+            raise JobError("源长边 %d 已超过 8K 上限" % long_side,
+                           "把「超分」取消勾选，只做区域修复即可")
+        if capped:
+            emit.log("为不超过 8K（长边 %d），倍率从 %dx 降到 %dx"
+                     % (MAX_OUTPUT_LONG, opts.scale, scale_use))
+
         denoise = opts.denoise
         if denoise is None:
             denoise = 3 if h < 720 else 0
         # 按真实存在的文件挑组合，避免 ncnn 因 _wfopen 失败直接崩（0xC0000409）
         model_name, scale_used, denoise_used = resolve_model(
-            available, opts.model, int(opts.scale), int(denoise), emit)
+            available, opts.model, int(scale_use), int(denoise), emit)
         denoise = denoise_used
         emit.log("%d 帧 · 高 %d · 模型 %s · %dx · 降噪 %d（%s）"
                  % (n, h, model_name, scale_used, denoise,

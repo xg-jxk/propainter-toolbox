@@ -386,13 +386,47 @@ class AppSmokeTest(unittest.TestCase):
         self.assertIn("模型上限", texts[3])
         self.assertFalse(win.sr_panel.target.model().item(0).isEnabled())
         win.sr_panel.set_target("4K")
-        self.assertEqual(win.sr_panel.options(720)["scale"], 3)
+        self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 3)
         win.sr_panel.set_target("2K")
-        self.assertEqual(win.sr_panel.options(720)["scale"], 2)
+        self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 2)
         win.sr_panel.set_target("max")
-        self.assertEqual(win.sr_panel.options(720)["scale"], 4)
+        self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 4)
         self.assertIn("1280×720", win.sr_panel.scale_hint.text())
         win.close()
+
+    def test_eight_k_cap(self):
+        """最高档不能放出超过 8K 的输出。"""
+        from pplib.sr import clamp_scale
+        from app.ui.panels import pick_scale
+
+        # 720p 源：4x = 5120 长边，没超 8K
+        self.assertEqual(pick_scale(1280, 720, 0), (4, "max"))
+        # 1080p 源：4x = 7680，正好 8K
+        self.assertEqual(pick_scale(1920, 1080, 0), (4, "max"))
+        # 4K 源：4x = 15360 超限，最高只能 2x（7680）
+        self.assertEqual(pick_scale(3840, 2160, 0), (2, "max8k"))
+        # 8K 源：再放大必超，直接不可用
+        self.assertEqual(pick_scale(7680, 4320, 0), (0, "too_big"))
+        # 竖屏按长边算：1080x1920 的 4x = 7680，正好
+        self.assertEqual(pick_scale(1080, 1920, 0), (4, "max"))
+
+        # 后端兜底
+        self.assertEqual(clamp_scale(3840, 2160, 4), (2, True))
+        self.assertEqual(clamp_scale(1920, 1080, 4), (4, False))
+        self.assertEqual(clamp_scale(1280, 720, 4), (4, False))
+        self.assertEqual(clamp_scale(7680, 4320, 2), (0, True))
+        self.assertEqual(clamp_scale(0, 0, 4), (4, False))
+
+    def test_window_shows_8k_cap(self):
+        win = self._win()
+        win.sr_panel.set_source_size(3840, 2160)
+        win.sr_panel.set_target("max")
+        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 2)
+        hint = win.sr_panel.scale_hint.text()
+        self.assertIn("8K", hint)
+        self.assertIn("最高只到 2x", hint)
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()

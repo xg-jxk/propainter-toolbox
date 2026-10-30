@@ -372,6 +372,7 @@ class MainWindow(QMainWindow):
             "ref_stride": self.repair_panel.ref_stride.value(),
             "sr_target": self.sr_panel.target_key(),
             "scale": self.sr_panel.options(
+                self.queue[0].width if len(self.queue) else 0,
                 self.queue[0].height if len(self.queue) else 0)["scale"],
             "denoise": str(self.sr_panel.denoise.currentData()),
             "model": self.sr_panel.model.currentData(),
@@ -423,8 +424,9 @@ class MainWindow(QMainWindow):
     def _update_preview(self, *_):
         video = self.queue[0].path if len(self.queue) else os.path.join("D:\\video", "a.mp4")
         mode = self._mode() or "repair"
+        _src_w = self.queue[0].width if len(self.queue) else 0
         _src_h = self.queue[0].height if len(self.queue) else 0
-        scale = pick_scale(_src_h, self.sr_panel.target_height())[0]
+        scale = pick_scale(_src_w, _src_h, self.sr_panel.target_long())[0]
         preview = self.output_panel.test_mode.isChecked()
         path = self.output_panel.out_path(video, mode, scale, preview=preview)
         if not path:
@@ -579,7 +581,8 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, COL_PCT, QTableWidgetItem("%d%%" % int(item.pct)))
         self.table.setItem(row, COL_ELAPSED,
                            QTableWidgetItem("%.0fs" % item.elapsed if item.elapsed else ""))
-        scale, status = pick_scale(item.height, self.sr_panel.target_height())
+        scale, status = pick_scale(item.width, item.height,
+                                   self.sr_panel.target_long())
         if item.width and item.height:
             size_txt = "%d×%d" % (item.width * scale, item.height * scale)
             if status == "capped":
@@ -595,12 +598,12 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, COL_OUT, out)
 
     # ================================================================ 处理
-    def _build_spec(self, video, height=0):
+    def _build_spec(self, video, width=0, height=0):
         mode = self._mode()
         if mode is None:
             raise ValueError("至少启用区域修复或超分")
         repair = self.repair_panel.options()
-        sr = self.sr_panel.options(height)
+        sr = self.sr_panel.options(width, height)
         repair["crf"] = self.output_panel.crf_value()
         repair["encoder"] = self.output_panel.encoder_value()
         repair["keep"] = self.keep.isChecked()
@@ -662,13 +665,13 @@ class MainWindow(QMainWindow):
             return
         buckets = {}
         for it in self.queue:
-            scale, status = pick_scale(it.height, self.sr_panel.target_height())
+            scale, status = pick_scale(it.width, it.height, self.sr_panel.target_long())
             tag = "%dx" % scale if status != "capped" else "%dx封顶" % scale
             buckets[tag] = buckets.get(tag, 0) + 1
         detail = "，".join("%s ×%d" % (k, v) for k, v in sorted(buckets.items()))
         self.append_log("目标 %s：%s" % (self.sr_panel.target_key(), detail))
-        over = [it for it in self.queue
-                if pick_scale(it.height, self.sr_panel.target_height())[1] == "unreachable"]
+        over = [it for it in self.queue if pick_scale(
+            it.width, it.height, self.sr_panel.target_long())[1] == "unreachable"]
         if over:
             self.append_log("⚠ 有 %d 个文件的源分辨率已接近/超过目标，最小只能 2x（会超出目标）"
                             % len(over))
@@ -686,7 +689,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.status_label.setText("准备：%s" % item.name)
         self.append_log("→ %s" % item.path)
-        self.runner.start(self._build_spec(item.path, item.height))
+        self.runner.start(self._build_spec(item.path, item.width, item.height))
 
     def _on_stage(self, name, pct):
         self.progress.setValue(int(pct))
