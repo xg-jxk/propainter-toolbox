@@ -7,13 +7,14 @@
 import os
 import sys
 
-from PySide6.QtCore import QSharedMemory
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QSharedMemory, Qt
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QDialog, QMessageBox, QProxyStyle,
-                               QStyle)
+                               QSplashScreen, QStyle)
 
 from pplib import __version__
 
+from .core import applog
 from .ui import bubble as bubble_ui
 from .core import config as cfgmod
 from .ui.mainwindow import MainWindow
@@ -71,8 +72,24 @@ def main(argv=None):
         cfg["terms_version"] = cfgmod.TERMS_VERSION
         cfgmod.save(cfg)
 
+    splash = None
+    if os.path.isfile(icon):
+        pix = QIcon(icon).pixmap(320, 320)
+        if not pix.isNull():
+            splash = QSplashScreen(pix)
+            splash.showMessage("ProPainter 工具箱 v%s · 正在启动…" % __version__,
+                               Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+                               Qt.GlobalColor.white)
+            splash.show()
+            app.processEvents()
+
     win = MainWindow(cfg)
     win.show()
+    if splash is not None:
+        splash.finish(win)
+    win.start_env_probe()      # 后台探测，不阻塞首屏
+    applog.setup()
+    applog.write("启动 v%s · Python %s" % (__version__, sys.version.split()[0]))
     return app.exec()
 
 

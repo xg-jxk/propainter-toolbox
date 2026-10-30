@@ -15,6 +15,7 @@ from pplib import __version__
 from pplib.ffmpeg import ROOT
 from pplib.options import default_out
 
+from ..core import applog
 from ..core import config as cfgmod
 from ..core import envcheck
 from ..core.bridge import JobRunner
@@ -85,8 +86,9 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.cfg = cfg or cfgmod.load()
         self.queue = JobQueue()
-        self.runtime = envcheck.check()
-        self.runner = JobRunner(self.runtime.venv_python, self)
+        self.runtime = None      # 由后台探测填充，避免启动时同步跑子进程
+        self._probe = None
+        self.runner = JobRunner(envcheck.VENV_PYTHON, self)
         self._current = None
         self._cancel_all = False
         self._t_start = 0.0
@@ -454,17 +456,44 @@ class MainWindow(QMainWindow):
         self._update_preview()
 
     # ================================================================ 运行时
+    def start_env_probe(self):
+        """后台探测运行环境（由 app.main 在窗口显示后调用，测试里不启动）。"""
+        if self._probe is not None:
+            return
+        from ..core.probe import EnvProbe
+        self._probe = EnvProbe(self)
+        self._probe.done.connect(self._on_env_probed)
+        self._probe.start()
+        self._refresh_runtime()
+
+    def _on_env_probed(self, status):
+        self.runtime = status
+        self._refresh_runtime()
+        if status.ready:
+            applog.write("环境自检：就绪 · %s" % status.gpu_text())
+        else:
+            applog.write("环境自检：缺少 %s" % status.missing_text())
+
     def _refresh_runtime(self):
-        self.runtime = envcheck.check()
         st = self.runtime
+        if st is None:
+            self.runtime_label.setText("正在检测运行环境…")
+            self.runtime_label.setStyleSheet("color:#6b7488")
+            self.runtime_label.setToolTip("后台检测 nvidia-smi / ffmpeg / 权重，不阻塞界面")
+            self.btn_install.setVisible(False)
+            self._on_modules_changed()
+            return
         if st.ready:
             self.runtime_label.setText("运行时就绪 · %s" % st.gpu_text())
             self.runtime_label.setStyleSheet("color:#2e7d32")
             self.btn_install.setVisible(False)
+            self.btn_install.setText("安装运行时")
         else:
-            self.runtime_label.setText("缺少运行时：%s" % st.missing_text())
+            self.runtime_label.setText("缺少运行时：%s —— 点右侧【① 安装运行时】开始"
+                                       % st.missing_text())
             self.runtime_label.setStyleSheet("color:#c62828")
             self.btn_install.setVisible(True)
+            self.btn_install.setText("① 安装运行时")
         self.runtime_label.setToolTip(st.gpu_text() + ("\n支持 NVENC" if st.nvenc else ""))
         self._on_modules_changed()
 
@@ -483,6 +512,9 @@ class MainWindow(QMainWindow):
 
     def show_env(self):
         st = self.runtime
+        if st is None:
+            QMessageBox.information(self, "环境信息", "还在检测中，请稍候再点。")
+            return
         info = envcheck.torch_info(st.venv_python)
         text = ("<b>Python</b>：%s<br><b>torch</b>：%s<br><b>显卡</b>：%s<br>"
                 "<b>NVENC</b>：%s<br><b>权重</b>：%s<br><b>Real-CUGAN</b>：%s<br>"
@@ -630,6 +662,9 @@ class MainWindow(QMainWindow):
     def start_queue(self):
         if self.runner.is_running():
             return
+        if self.runtime is None:
+            QMessageBox.information(self, "稍等一下", "还在检测运行环境，一两秒后再点开始。")
+            return
         if not self.runtime.ready:
             if QMessageBox.question(self, "缺少运行时",
                                     "还没有安装好运行环境（%s）。现在去安装吗？"
@@ -720,8 +755,13 @@ class MainWindow(QMainWindow):
     def _on_runner_started(self):
         self.status_label.setText("运行时已启动，等待输出…")
 
+    def _set_title_pct(self, pct):
+        base = "ProPainter 工具箱 v%s" % __version__
+        self.setWindowTitle("%d%% · %s" % (int(pct), base) if pct > 0 else base)
+
     def _on_stage(self, name, pct):
         self.progress.setValue(int(pct))
+        self._set_title_pct(pct)
         self.status_label.setText("%s · %d%%" % (name, int(pct)))
         if self._current is not None:
             item = self.queue[self._current]
@@ -730,6 +770,7 @@ class MainWindow(QMainWindow):
 
     def _on_progress(self, cur, total, pct, eta, note):
         self.progress.setValue(int(pct))
+        self._set_title_pct(pct)
         eta_txt = _fmt_eta(eta)
         self.status_label.setText("%s %d/%d · %s"
                                   % (note or "", cur, total, eta_txt or "%d%%" % int(pct)))
@@ -810,6 +851,7 @@ class MainWindow(QMainWindow):
 
     def _all_done(self):
         self.set_running(False)
+        self._set_title_pct(0)
         done = sum(1 for it in self.queue if it.status in (STATUS_DONE, "完成（跳修复）", "完成（预览）"))
         skipped = sum(1 for it in self.queue if it.status == STATUS_SKIPPED)
         failed = sum(1 for it in self.queue if it.status in (STATUS_FAILED, STATUS_CANCELLED))
@@ -845,6 +887,7 @@ class MainWindow(QMainWindow):
             return
         for line in str(text).splitlines():
             self.log.appendPlainText(line)
+        applog.write(text)
 
     # ================================================================ 其它
     def pick_mask(self):
@@ -892,6 +935,11 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.runner.cancel()
+        if self._probe is not None:
+            try:
+                self._probe.done.disconnect(self._on_env_probed)
+            except Exception:
+                pass
         self.cfg.update(self._collect_config())
         cfgmod.save(self.cfg)
         event.accept()
