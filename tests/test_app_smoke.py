@@ -52,7 +52,7 @@ class AppSmokeTest(unittest.TestCase):
     def test_window_builds(self):
         win = self._win()
         self.assertIn("ProPainter", win.windowTitle())
-        self.assertEqual(win.table.columnCount(), 5)
+        self.assertEqual(win.table.columnCount(), 6)
         self.assertEqual(win.queue_label.text(), "0 / 20")
         self.assertIsNotNone(win.repair_panel)
         self.assertIsNotNone(win.sr_panel)
@@ -379,12 +379,18 @@ class AppSmokeTest(unittest.TestCase):
 
         win = self._win()
         win.sr_panel.set_source_size(1280, 720)
-        self.assertIn("2560×1440", win.sr_panel.scale.itemText(0))
-        self.assertIn("3840×2160", win.sr_panel.scale.itemText(1))
-        self.assertIn("5120×2880", win.sr_panel.scale.itemText(2))
-        self.assertIn("CPU", win.sr_panel.scale.itemText(2))
-        win.sr_panel.set_scale(3)
-        self.assertEqual(win.sr_panel.options()["scale"], 3)
+        # 720p：2K=2x、4K=3x、8K 封顶 4x；1080p 档不可达
+        texts = [win.sr_panel.target.itemText(i) for i in range(win.sr_panel.target.count())]
+        self.assertIn("2560×1440", texts[1])
+        self.assertIn("3840×2160", texts[2])
+        self.assertIn("模型上限", texts[3])
+        self.assertFalse(win.sr_panel.target.model().item(0).isEnabled())
+        win.sr_panel.set_target("4K")
+        self.assertEqual(win.sr_panel.options(720)["scale"], 3)
+        win.sr_panel.set_target("2K")
+        self.assertEqual(win.sr_panel.options(720)["scale"], 2)
+        win.sr_panel.set_target("max")
+        self.assertEqual(win.sr_panel.options(720)["scale"], 4)
         self.assertIn("1280×720", win.sr_panel.scale_hint.text())
         win.close()
 

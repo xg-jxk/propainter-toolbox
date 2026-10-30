@@ -58,6 +58,42 @@ def _k_label(width, height):
     return "%dp" % int(height)
 
 
+
+#: 分辨率档位：(键, 目标高度)。0 表示"最高"，即模型上限 4x
+TARGETS = [("1080p", "1080p", 1080), ("2K", "2K", 1440), ("4K", "4K", 2160),
+           ("8K", "8K", 4320), ("max", "最高", 0)]
+
+
+def target_label(key):
+    for k, label, _h in TARGETS:
+        if k == key:
+            return label
+    return key
+SCALES = (2, 3, 4)
+
+
+def pick_scale(src_h, target_h):
+    """目标高度 → 实际倍率。返回 (scale, status)。
+
+    status: max 最高档 / ok 正好命中 / up 会超出目标 / capped 4x 也到不了 /
+            unreachable 源已经达到或超过目标（最小 2x 也没意义）/ unknown 未知源
+    """
+    if not target_h:
+        return 4, "max"
+    if not src_h:
+        return 2, "unknown"
+    need = float(target_h) / float(src_h)
+    if need < 2 - 1e-6:
+        return 2, "unreachable"
+    if need > 4 + 1e-6:
+        return 4, "capped"
+    for s in SCALES:
+        out = src_h * s
+        if out >= target_h - 0.5:
+            return s, ("ok" if abs(out - target_h) <= 1 else "up")
+    return 4, "capped"
+
+
 def _spin(lo, hi, val, suffix=""):
     sp = QSpinBox()
     sp.setRange(lo, hi)
@@ -182,23 +218,25 @@ class RepairPanel(ModuleCard):
 
 
 class SRPanel(ModuleCard):
-    """超分：倍率 + 降噪 + 高级（模型）。"""
+    """超分：目标分辨率 + 降噪 + 高级（模型）。"""
 
     def __init__(self, parent=None, enabled=False):
         super().__init__("超分（Real-CUGAN）", "scale", checked=enabled, parent=parent)
         g = self.grid
 
-        self.scale = QComboBox()
-        self.scale.setMinimumWidth(220)
-        g.addWidget(label_with_info("输出分辨率", "scale"), 0, 0)
-        g.addWidget(attach(self.scale, "scale"), 0, 1, 1, 3)
-        self.scale_hint = QLabel("加入视频后按源尺寸显示实际输出")
+        self.target = QComboBox()
+        self.target.setMinimumWidth(280)
+        g.addWidget(label_with_info("目标分辨率", "scale"), 0, 0)
+        g.addWidget(attach(self.target, "scale"), 0, 1, 1, 3)
+        self.scale_hint = QLabel("加入视频后按源尺寸自动换算倍率")
         self.scale_hint.setObjectName("hintLabel")
         self.scale_hint.setWordWrap(True)
         g.addWidget(self.scale_hint, 1, 0, 1, 4)
+
         self._src_w, self._src_h = 0, 0
-        self.set_source_size(0, 0)
-        self.scale.currentIndexChanged.connect(lambda _i: self._refresh_hint())
+        self._target_key = "4K"
+        self._rebuild()
+        self.target.currentIndexChanged.connect(self._on_target_changed)
 
         self.denoise = _combo(DENOISE_OPTIONS, "auto")
         g.addWidget(label_with_info("降噪", "denoise"), 2, 0)
@@ -210,50 +248,118 @@ class SRPanel(ModuleCard):
         self.advanced.grid.addWidget(attach(self.model, "model"), 0, 1)
         g.addWidget(self.advanced, 3, 0, 1, 4)
 
+    # ---------------------------------------------------------- 档位
     def set_source_size(self, width, height):
-        """按源尺寸重建选项文字（2x/3x/4x 对应的实际分辨率）。"""
+        """源尺寸变化时重建档位（不可达的变灰）。"""
         self._src_w, self._src_h = int(width or 0), int(height or 0)
-        current = self.scale_value()
-        blocked = self.scale.blockSignals(True)
-        self.scale.clear()
-        for s in (2, 3, 4):
-            if self._src_w and self._src_h:
-                ow, oh = self._src_w * s, self._src_h * s
-                text = "%dx → %d×%d（%s）" % (s, ow, oh, _k_label(ow, oh))
-                if ow > 4096 or oh > 4096:
-                    text += "  CPU 编码"
-            else:
-                text = "%dx（加入视频后显示实际尺寸）" % s
-            self.scale.addItem(text, s)
-        self.scale.blockSignals(blocked)
-        self.set_scale(current)
+        self._rebuild()
+
+    def target_key(self):
+        data = self.target.currentData()
+        return data[0] if data else self._target_key
+
+    def target_height(self):
+        data = self.target.currentData()
+        return int(data[1]) if data else 2160
+
+    def set_target(self, key):
+        for i in range(self.target.count()):
+            data = self.target.itemData(i)
+            if not data:
+                continue
+            item = self.target.model().item(i)
+            if data[0] == key and (item is None or item.isEnabled()):
+                self.target.setCurrentIndex(i)
+                self._target_key = key
+                self._refresh_hint()
+                return
+        # 指定档位不可达（或不存在）→ 退到最高档
+        for i in range(self.target.count() - 1, -1, -1):
+            item = self.target.model().item(i)
+            if item is not None and item.isEnabled():
+                self.target.setCurrentIndex(i)
+                self._target_key = self.target_key()
+                break
         self._refresh_hint()
 
-    def set_scale(self, scale):
-        idx = self.scale.findData(int(scale))
-        if idx >= 0:
-            self.scale.setCurrentIndex(idx)
+    def _on_target_changed(self, _idx):
+        self._target_key = self.target_key()
         self._refresh_hint()
 
-    def scale_value(self):
-        data = self.scale.currentData()
-        return int(data) if data else 2
-
-    def _refresh_hint(self):
-        if not (self._src_w and self._src_h):
-            self.scale_hint.setText("加入视频后按源尺寸显示实际输出")
-            return
-        s = self.scale_value()
+    def _item_text(self, key, target_h):
+        label = target_label(key)
+        if not self._src_h:
+            if not target_h:
+                return "最高 · 4x（模型上限）"
+            return "%s · 加入视频后显示实际尺寸" % label
+        s, status = pick_scale(self._src_h, target_h)
+        if status == "unreachable":
+            return "%s · 源 %dp，最小 2x 已是 %dp" % (label, self._src_h, self._src_h * 2)
         ow, oh = self._src_w * s, self._src_h * s
-        txt = "源 %d×%d · 当前输出 %d×%d（%s）" % (self._src_w, self._src_h, ow, oh, _k_label(ow, oh))
+        text = "%s · %dx · %d×%d" % (label, s, ow, oh)
+        if status == "up":
+            text += "（超出目标）"
+        elif status == "capped":
+            text += "（模型上限）"
+        elif status == "max":
+            text += "（最高）"
         if ow > 4096 or oh > 4096:
-            txt += " · 超过显卡 H.264 上限，会自动用 CPU 编码"
+            text += "  CPU 编码"
+        return text
+
+    def _rebuild(self):
+        prev = self._target_key
+        blocked = self.target.blockSignals(True)
+        self.target.clear()
+        enabled_keys = []
+        for key, _label, target_h in TARGETS:
+            _, status = pick_scale(self._src_h, target_h)
+            enabled = status not in ("unreachable",)
+            self.target.addItem(self._item_text(key, target_h), (key, target_h))
+            item = self.target.model().item(self.target.count() - 1)
+            if item is not None:
+                item.setEnabled(enabled)
+            if enabled:
+                enabled_keys.append(key)
+        self.target.blockSignals(blocked)
+
+        want = prev if prev in enabled_keys else (
+            "4K" if "4K" in enabled_keys else ("8K" if "8K" in enabled_keys else None))
+        if want is None:
+            want = enabled_keys[-1] if enabled_keys else None
+        if want is not None:
+            self.set_target(want)
+        else:
+            self._refresh_hint()
+
+    # ---------------------------------------------------------- 提示
+    def _refresh_hint(self):
+        if not self._src_h:
+            self.scale_hint.setText("加入视频后按源尺寸自动换算倍率")
+            return
+        key = self.target_key()
+        target_h = self.target_height()
+        s, status = pick_scale(self._src_h, target_h)
+        ow, oh = self._src_w * s, self._src_h * s
+        txt = "源 %d×%d → %s 用 %dx · %d×%d（%s）" % (
+            self._src_w, self._src_h, target_label(key), s, ow, oh, _k_label(ow, oh))
+        if status == "up":
+            txt += " · 该源无法精确命中，取上一档"
+        elif status == "capped":
+            txt += " · 4x 已是模型上限，达不到 %s" % target_label(key)
+        elif status == "max":
+            txt += " · 模型支持的最高倍率"
+        if ow > 4096 or oh > 4096:
+            txt += " · 超 4096，自动用 CPU 编码"
         self.scale_hint.setText(txt)
 
-    def options(self):
+    # ---------------------------------------------------------- 取值
+    def options(self, src_h=None):
+        height = self._src_h if src_h is None else int(src_h or 0)
+        scale, _status = pick_scale(height, self.target_height())
         denoise = self.denoise.currentData()
         return {
-            "scale": self.scale_value(),
+            "scale": scale,
             "denoise": None if denoise == "auto" else int(denoise),
             "model": self.model.currentData(),
             "crf": 17,
@@ -262,7 +368,7 @@ class SRPanel(ModuleCard):
         }
 
     def apply_preset(self, preset):
-        pass  # 预设不改输出分辨率
+        pass  # 预设不改目标分辨率
 
 
 class OutputPanel(QFrame):

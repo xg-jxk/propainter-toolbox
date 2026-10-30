@@ -24,11 +24,12 @@ from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
 from .help import checkbox_with_info, info_icon
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
-from .panels import PRESETS, OutputPanel, RepairPanel, SRPanel
+from .panels import (PRESETS, OutputPanel, RepairPanel, SRPanel,
+                     pick_scale)
 from .terms_dialog import TermsDialog
 from .widgets import Collapsible
 
-COL_FILE, COL_STATUS, COL_PCT, COL_ELAPSED, COL_OUT = range(5)
+COL_FILE, COL_STATUS, COL_PCT, COL_ELAPSED, COL_SIZE, COL_OUT = range(6)
 
 
 def _fmt_eta(sec):
@@ -153,15 +154,16 @@ class MainWindow(QMainWindow):
         self.drop = DropArea()
         lv.addWidget(self.drop)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["文件", "状态", "进度", "用时", "输出"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["文件", "状态", "进度", "用时", "输出尺寸", "输出"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(COL_FILE, QHeaderView.ResizeMode.Stretch)
-        for col in (COL_STATUS, COL_PCT, COL_ELAPSED, COL_OUT):
+        for col in (COL_STATUS, COL_PCT, COL_ELAPSED, COL_SIZE, COL_OUT):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         lv.addWidget(self.table, 1)
 
@@ -301,7 +303,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.detect.changed.connect(self._update_preview)
         self.repair_panel.padding.valueChanged.connect(self._update_preview)
         self.repair_panel.rect.textChanged.connect(self._update_preview)
-        self.sr_panel.scale.currentIndexChanged.connect(self._update_preview)
+        self.sr_panel.target.currentIndexChanged.connect(self._update_preview)
         self.output_panel.out_dir.textChanged.connect(self._update_preview)
         self.output_panel.crf.valueChanged.connect(self._update_preview)
         self.output_panel.test_mode.toggled.connect(self._update_preview)
@@ -330,7 +332,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.mask_dilation.setValue(int(c.get("mask_dilation", 2)))
         self.repair_panel.detect_thr.setValue(float(c.get("detect_thr", 0.62)))
         self.repair_panel.ref_stride.setValue(int(c.get("ref_stride", 12)))
-        self.sr_panel.set_scale(int(c.get("scale", 2)))
+        self.sr_panel.set_target(str(c.get("sr_target", "4K")))
         idx = self.sr_panel.denoise.findData(str(c.get("denoise", "auto")))
         if idx < 0:
             idx = self.sr_panel.denoise.findData(c.get("denoise", "auto"))
@@ -368,7 +370,9 @@ class MainWindow(QMainWindow):
             "mask_dilation": self.repair_panel.mask_dilation.value(),
             "detect_thr": round(self.repair_panel.detect_thr.value(), 2),
             "ref_stride": self.repair_panel.ref_stride.value(),
-            "scale": self.sr_panel.scale_value(),
+            "sr_target": self.sr_panel.target_key(),
+            "scale": self.sr_panel.options(
+                self.queue[0].height if len(self.queue) else 0)["scale"],
             "denoise": str(self.sr_panel.denoise.currentData()),
             "model": self.sr_panel.model.currentData(),
             "out_dir": self.output_panel.out_dir_text(),
@@ -419,7 +423,8 @@ class MainWindow(QMainWindow):
     def _update_preview(self, *_):
         video = self.queue[0].path if len(self.queue) else os.path.join("D:\\video", "a.mp4")
         mode = self._mode() or "repair"
-        scale = self.sr_panel.scale_value()
+        _src_h = self.queue[0].height if len(self.queue) else 0
+        scale = pick_scale(_src_h, self.sr_panel.target_height())[0]
         preview = self.output_panel.test_mode.isChecked()
         path = self.output_panel.out_path(video, mode, scale, preview=preview)
         if not path:
@@ -508,6 +513,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "有文件未加入",
                                 "队列上限 20 个，以下文件没加入：\n\n" + "\n".join(lines))
         self._refresh_queue_label()
+        self._sync_scale_labels()
         self._update_preview()
 
     def _probe_item(self, item):
@@ -573,17 +579,28 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, COL_PCT, QTableWidgetItem("%d%%" % int(item.pct)))
         self.table.setItem(row, COL_ELAPSED,
                            QTableWidgetItem("%.0fs" % item.elapsed if item.elapsed else ""))
+        scale, status = pick_scale(item.height, self.sr_panel.target_height())
+        if item.width and item.height:
+            size_txt = "%d×%d" % (item.width * scale, item.height * scale)
+            if status == "capped":
+                size_txt += "（封顶）"
+        else:
+            size_txt = "—"
+        size_cell = QTableWidgetItem(size_txt)
+        size_cell.setToolTip("按目标 %s 计算：%dx" % (self.sr_panel.target_key(), scale))
+        self.table.setItem(row, COL_SIZE, size_cell)
+
         out = QTableWidgetItem(item.out or item.message)
         out.setToolTip(item.out or item.message)
         self.table.setItem(row, COL_OUT, out)
 
     # ================================================================ 处理
-    def _build_spec(self, video):
+    def _build_spec(self, video, height=0):
         mode = self._mode()
         if mode is None:
             raise ValueError("至少启用区域修复或超分")
         repair = self.repair_panel.options()
-        sr = self.sr_panel.options()
+        sr = self.sr_panel.options(height)
         repair["crf"] = self.output_panel.crf_value()
         repair["encoder"] = self.output_panel.encoder_value()
         repair["keep"] = self.keep.isChecked()
@@ -636,8 +653,25 @@ class MainWindow(QMainWindow):
         if not self.log_box.is_expanded():
             self.log_box.set_expanded(True)
         self.append_log("===== 开始处理 %d 个文件（%s）=====" % (len(self.queue), self._mode()))
+        self._log_target_summary()
         self.set_running(True)
         self._start_next()
+
+    def _log_target_summary(self):
+        if not len(self.queue):
+            return
+        buckets = {}
+        for it in self.queue:
+            scale, status = pick_scale(it.height, self.sr_panel.target_height())
+            tag = "%dx" % scale if status != "capped" else "%dx封顶" % scale
+            buckets[tag] = buckets.get(tag, 0) + 1
+        detail = "，".join("%s ×%d" % (k, v) for k, v in sorted(buckets.items()))
+        self.append_log("目标 %s：%s" % (self.sr_panel.target_key(), detail))
+        over = [it for it in self.queue
+                if pick_scale(it.height, self.sr_panel.target_height())[1] == "unreachable"]
+        if over:
+            self.append_log("⚠ 有 %d 个文件的源分辨率已接近/超过目标，最小只能 2x（会超出目标）"
+                            % len(over))
 
     def _start_next(self):
         idx = self.queue.next_pending_index()
@@ -652,7 +686,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.status_label.setText("准备：%s" % item.name)
         self.append_log("→ %s" % item.path)
-        self.runner.start(self._build_spec(item.path))
+        self.runner.start(self._build_spec(item.path, item.height))
 
     def _on_stage(self, name, pct):
         self.progress.setValue(int(pct))
