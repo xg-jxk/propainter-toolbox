@@ -86,6 +86,42 @@ class AppSmokeTest(unittest.TestCase):
         st = envcheck.check()
         self.assertIsInstance(st.ready, bool)
         self.assertIsInstance(st.ffmpeg_ok, bool)
+    def test_every_param_has_help(self):
+        from app.ui import help as uihelp
+        used = ("mode", "detect", "rect", "mask", "padding", "subvideo",
+                "crf", "encoder", "scale", "denoise", "out_dir", "keep", "open_when_done")
+        for key in used:
+            self.assertIn(key, uihelp.PARAM_HELP, key)
+            html = uihelp.tooltip_html(key)
+            self.assertIn("<b>", html)
+            self.assertGreater(len(html), 40, key)
+
+    def test_info_icons_are_wired(self):
+        from PySide6.QtWidgets import QLabel
+        from app.ui.mainwindow import MainWindow
+        win = MainWindow()
+        icons = [w for w in win.findChildren(QLabel) if w.objectName() == "infoIcon"]
+        self.assertEqual(len(icons), 13)
+        for ic in icons:
+            self.assertTrue(ic.toolTip(), "有 i 图标没挂 tooltip")
+            self.assertEqual(ic.toolTipDuration(), 15000)
+        win.close()
+
+    def test_github_button(self):
+        from app.ui import links
+        from app.ui.mainwindow import MainWindow
+        win = MainWindow()
+        self.assertFalse(win.btn_github.icon().isNull())
+        self.assertTrue(win.btn_github.toolTip())
+        self.assertTrue(links.PROJECT_URL.startswith("https://github.com/xg-jxk/"))
+        win.close()
+
+    def test_subvideo_widget_in_layout(self):
+        from app.ui.mainwindow import MainWindow
+        win = MainWindow()
+        self.assertIsNotNone(win.subvideo.parent())
+        self.assertEqual(win.subvideo.minimum(), 10)
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

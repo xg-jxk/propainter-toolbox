@@ -27,8 +27,8 @@ QLabel#dropLabel {
 }
 
 QFrame#dropArea {
-    background: #ffffff;
-    border: 2px dashed #b9c4dc;
+    background: #fbfcff;
+    border: 2px dashed #9aabd0;
     border-radius: 12px;
 }
 
@@ -177,4 +177,32 @@ QScrollBar::handle:vertical {
 
 QScrollBar::add-line, QScrollBar::sub-line {
     height: 0;
+}
+/* ---- 参数说明「i」与 GitHub 入口 ---- */
+QLabel#infoIcon {
+    color: #6b7488;
+    background: #ffffff;
+    border: 1px solid #c3cbdc;
+    border-radius: 7px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+QLabel#infoIcon:hover {
+    color: #ffffff;
+    background: #2f6feb;
+    border-color: #2f6feb;
+}
+
+QToolButton#ghButton {
+    background: #ffffff;
+    border: 1px solid #d3daea;
+    border-radius: 8px;
+    padding: 5px 10px;
+    color: #20242c;
+}
+
+QToolButton#ghButton:hover {
+    border-color: #2f6feb;
+    color: #2f6feb;
 }

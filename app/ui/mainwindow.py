@@ -3,13 +3,14 @@
 import os
 import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                                QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton, QSpinBox, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+                               QTableWidgetItem, QToolButton, QVBoxLayout,
+                               QWidget)
 
 from pplib import __version__
 from pplib.ffmpeg import ROOT
@@ -20,7 +21,9 @@ from ..core import envcheck
 from ..core.bridge import JobRunner
 from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
                           STATUS_PENDING, STATUS_RUNNING, JobQueue)
+from .help import attach, checkbox_with_info, label_with_info
 from .install_dialog import InstallDialog
+from .links import PROJECT_URL, load_icon, open_url
 from .terms_dialog import TermsDialog
 
 MODE_LABELS = [("区域修复", "repair"), ("超分", "sr"), ("区域修复 + 超分", "pipeline")]
@@ -52,7 +55,7 @@ class DropArea(QFrame):
         super().__init__(parent)
         self.setObjectName("dropArea")
         self.setAcceptDrops(True)
-        self.setMinimumHeight(86)
+        self.setMinimumHeight(96)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 10, 16, 10)
@@ -120,6 +123,15 @@ class MainWindow(QMainWindow):
         self.btn_install = QPushButton("安装运行时")
         self.btn_install.setObjectName("primary")
         head.addWidget(self.btn_install)
+        self.btn_github = QToolButton()
+        self.btn_github.setObjectName("ghButton")
+        self.btn_github.setText("GitHub")
+        self.btn_github.setIcon(load_icon("github.svg", 18))
+        self.btn_github.setIconSize(QSize(18, 18))
+        self.btn_github.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_github.setToolTip("在 GitHub 上查看源码、下载新版本、反馈问题")
+        self.btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
+        head.addWidget(self.btn_github)
         self.btn_terms = QPushButton("使用条款")
         head.addWidget(self.btn_terms)
         self.btn_env = QPushButton("环境信息")
@@ -157,87 +169,93 @@ class MainWindow(QMainWindow):
         qlay.addLayout(qrow)
         root.addWidget(qbox, 2)
 
-        # ---- 参数
+        # ---- 参数（每个参数带「i」，悬停看说明）
         pbox = QGroupBox("处理参数")
         grid = QGridLayout(pbox)
-        grid.setHorizontalSpacing(12)
+        grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
+        for col in (1, 3, 5):
+            grid.setColumnStretch(col, 1)
 
         self.mode = QComboBox()
         for label, key in MODE_LABELS:
             self.mode.addItem(label, key)
-        grid.addWidget(QLabel("模式"), 0, 0)
-        grid.addWidget(self.mode, 0, 1)
+        grid.addWidget(label_with_info("模式", "mode"), 0, 0)
+        grid.addWidget(attach(self.mode, "mode"), 0, 1)
 
         self.detect = QComboBox()
         for label, key in DETECT_LABELS:
             self.detect.addItem(label, key)
-        grid.addWidget(QLabel("区域定位"), 0, 2)
-        grid.addWidget(self.detect, 0, 3)
+        grid.addWidget(label_with_info("区域定位", "detect"), 0, 2)
+        grid.addWidget(attach(self.detect, "detect"), 0, 3)
 
         self.rect = QLineEdit()
         self.rect.setPlaceholderText("x,y,w,h  例如 1314,918,320,120")
-        grid.addWidget(QLabel("矩形"), 0, 4)
-        grid.addWidget(self.rect, 0, 5)
+        grid.addWidget(label_with_info("矩形", "rect"), 0, 4)
+        grid.addWidget(attach(self.rect, "rect"), 0, 5)
 
         self.mask = QLineEdit()
-        self.mask.setPlaceholderText("掩码目录或单张掩码 png")
-        self.btn_mask = QPushButton("…")
-        self.btn_mask.setFixedWidth(32)
+        self.mask.setPlaceholderText("掩码目录，或单张掩码 png")
+        self.btn_mask = QPushButton("选择…")
+        self.btn_mask.setFixedWidth(64)
         maskrow = QHBoxLayout()
+        maskrow.setContentsMargins(0, 0, 0, 0)
         maskrow.addWidget(self.mask, 1)
         maskrow.addWidget(self.btn_mask)
-        grid.addWidget(QLabel("掩码"), 1, 0)
-        grid.addLayout(maskrow, 1, 1, 1, 2)
+        grid.addWidget(label_with_info("掩码", "mask"), 1, 0)
+        grid.addLayout(maskrow, 1, 1, 1, 5)
 
         self.padding = QDoubleSpinBox()
         self.padding.setRange(0.0, 1.5)
         self.padding.setSingleStep(0.05)
         self.padding.setDecimals(2)
-        grid.addWidget(QLabel("外扩 padding"), 1, 3)
-        grid.addWidget(self.padding, 1, 4)
+        grid.addWidget(label_with_info("外扩 padding", "padding"), 2, 0)
+        grid.addWidget(attach(self.padding, "padding"), 2, 1)
 
         self.subvideo = QSpinBox()
         self.subvideo.setRange(10, 200)
-        grid.addWidget(QLabel("分段 subvideo"), 1, 5)
+        self.subvideo.setSuffix(" 帧")
+        grid.addWidget(label_with_info("分段 subvideo", "subvideo"), 2, 2)
+        grid.addWidget(attach(self.subvideo, "subvideo"), 2, 3)
+
+        self.crf = QSpinBox()
+        self.crf.setRange(0, 51)
+        grid.addWidget(label_with_info("画质 crf", "crf"), 2, 4)
+        grid.addWidget(attach(self.crf, "crf"), 2, 5)
 
         self.encoder = QComboBox()
         for label, key in ENCODER_LABELS:
             self.encoder.addItem(label, key)
-        grid.addWidget(QLabel("编码器"), 2, 0)
-        grid.addWidget(self.encoder, 2, 1)
-
-        self.crf = QSpinBox()
-        self.crf.setRange(0, 51)
-        grid.addWidget(QLabel("画质 crf"), 2, 2)
-        grid.addWidget(self.crf, 2, 3)
+        grid.addWidget(label_with_info("编码器", "encoder"), 3, 0)
+        grid.addWidget(attach(self.encoder, "encoder"), 3, 1)
 
         self.scale = QComboBox()
         for s in (2, 3, 4):
             self.scale.addItem("%dx" % s, s)
-        grid.addWidget(QLabel("超分倍率"), 2, 4)
-        grid.addWidget(self.scale, 2, 5)
+        grid.addWidget(label_with_info("超分倍率", "scale"), 3, 2)
+        grid.addWidget(attach(self.scale, "scale"), 3, 3)
 
         self.denoise = QComboBox()
         for label, key in DENOISE_LABELS:
             self.denoise.addItem(label, key)
-        grid.addWidget(QLabel("降噪"), 3, 0)
-        grid.addWidget(self.denoise, 3, 1)
+        grid.addWidget(label_with_info("降噪", "denoise"), 3, 4)
+        grid.addWidget(attach(self.denoise, "denoise"), 3, 5)
 
         self.out_dir = QLineEdit()
         self.out_dir.setPlaceholderText("留空 = 与源视频同目录")
-        self.btn_outdir = QPushButton("…")
-        self.btn_outdir.setFixedWidth(32)
+        self.btn_outdir = QPushButton("选择…")
+        self.btn_outdir.setFixedWidth(64)
         outrow = QHBoxLayout()
+        outrow.setContentsMargins(0, 0, 0, 0)
         outrow.addWidget(self.out_dir, 1)
         outrow.addWidget(self.btn_outdir)
-        grid.addWidget(QLabel("输出目录"), 3, 2)
-        grid.addLayout(outrow, 3, 3, 1, 3)
+        grid.addWidget(label_with_info("输出目录", "out_dir"), 4, 0)
+        grid.addLayout(outrow, 4, 1, 1, 5)
 
         self.keep = QCheckBox("保留中间文件（排障用）")
-        grid.addWidget(self.keep, 4, 1, 1, 2)
-        self.open_when_done = QCheckBox("完成后打开输出目录")
-        grid.addWidget(self.open_when_done, 4, 3, 1, 2)
+        grid.addWidget(checkbox_with_info(self.keep, "keep"), 5, 1, 1, 2)
+        self.open_when_done = QCheckBox("完成后自动打开输出目录")
+        grid.addWidget(checkbox_with_info(self.open_when_done, "open_when_done"), 5, 3, 1, 3)
         root.addWidget(pbox)
 
         # ---- 进度与操作
@@ -277,6 +295,7 @@ class MainWindow(QMainWindow):
         self.btn_outdir.clicked.connect(self.pick_outdir)
         self.btn_install.clicked.connect(self.open_install)
         self.btn_terms.clicked.connect(self.show_terms)
+        self.btn_github.clicked.connect(lambda: open_url(PROJECT_URL))
         self.btn_env.clicked.connect(self.show_env)
         self.start_btn.clicked.connect(self.start_queue)
         self.cancel_btn.clicked.connect(self.cancel_current)
