@@ -1,5 +1,7 @@
 # ProPainter 视频修复工具箱
 
+[![CI](https://github.com/xg-jxk/propainter-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/xg-jxk/propainter-toolbox/actions/workflows/ci.yml)
+
 > 把 [ProPainter](https://github.com/sczhou/ProPainter)（视频修复/补全）和
 > [Real-CUGAN](https://github.com/nihui/realcugan-ncnn-vulkan)（超分）包成一个
 > **Windows 桌面应用 + 三个拖拽脚本**，全程本地运行，不上传云端。
@@ -9,9 +11,13 @@
 > 请勿用于去除他人作品的署名/权利管理信息，或用于搬运、二次分发他人内容——那属于侵权，责任自负。
 > 完整条款见 [TERMS.md](TERMS.md)。
 
+> **授权范围（重要）**
+> 仅限**非商业**使用。核心模型 ProPainter 及其权重采用 S-Lab License 1.0；
+> 商用请先联系原作者授权（邮箱见 [THIRD_PARTY.md](THIRD_PARTY.md)）。
+
 > **下载**：
 > - GitHub：<https://github.com/xg-jxk/propainter-toolbox/releases/latest>
-> - Gitee 镜像：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.15>
+> - Gitee 镜像：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.16>
 >
 > 便携包 `ProPainterToolbox-<版本>-portable.zip`，约 49 MB；解压即用，首次启动会引导安装运行时。
 
@@ -86,12 +92,17 @@ ProPainterToolbox\
 
 ### 1.6 版本与许可
 
-- 当前版本：**v1.3.15**
+- 当前版本：**v1.3.16**
 - 技术栈：Python 3.11 + PyTorch 2.5.1 (CUDA 12.1) + PySide6 6.9 + ffmpeg（imageio-ffmpeg 自带）
-- 许可：
-  - 本仓库胶水代码（`pplib/`、`app/`、`tools/`、`build/`、`tests/`、`*.cmd`、`setup.*`）：**MIT**
-  - **ProPainter 及其权重：S-Lab License 1.0，仅限非商业用途**（商用请联系原作者）
-  - Real-CUGAN / realcugan-ncnn-vulkan：MIT
+- 许可（哪份文件管哪些内容）：
+
+| 范围 | 许可 | 能否商用 |
+|---|---|---|
+| `pplib/`、`app/`、`tools/`、`build/`、`tests/`、`*.cmd`、`setup.*`（本仓库胶水代码） | MIT | 可以 |
+| `LICENSE`：ProPainter 代码与权重（含 `inference_propainter.py`、`model/`、`core/`、`utils/`、`RAFT/`） | **S-Lab License 1.0** | **不可以**，需联系原作者 |
+| `LICENSE-MIT.txt`：Real-CUGAN / realcugan-ncnn-vulkan | MIT | 可以 |
+| 权重文件（`ProPainter.pth` 等） | 不随仓库分发，安装时从官方 Release 下载 | 同上，受 S-Lab 约束 |
+
 - 详见 [TERMS.md](TERMS.md) 与 [THIRD_PARTY.md](THIRD_PARTY.md)
 
 ---
@@ -112,8 +123,8 @@ ProPainterToolbox\
 
 1. 直接打开最新版页面：<https://github.com/xg-jxk/propainter-toolbox/releases/latest>
    （从仓库首页进的话：右侧栏的 **Releases** 区块 → 最新版本；它**不在**顶部 `Code / Issues` 那一排）
-2. 在 **Assets** 里下载 **`ProPainterToolbox-1.3.15-portable.zip`**（约 **49 MB**）
-3. Gitee 镜像（**同一份文件**）：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.15>
+2. 在 **Assets** 里下载 **`ProPainterToolbox-1.3.16-portable.zip`**（约 **49 MB**）
+3. Gitee 镜像（**同一份文件**）：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.16>
    国内下载 GitHub 慢时用它，附件名与校验值都一致
 
 > 包很小是因为它只是“界面外壳”：PyTorch、模型权重、超分工具都在第一次运行时按需下载。
@@ -273,11 +284,11 @@ ProPainterToolbox\
 # 打包 GUI 外壳 + 便携 zip
 powershell -NoProfile -ExecutionPolicy Bypass -File build\make.ps1 -Zip
 # 产物：dist\ProPainterToolbox\ProPainterToolbox.exe
-#       dist\ProPainterToolbox-1.3.15-portable.zip
+#       dist\ProPainterToolbox-1.3.16-portable.zip
 
 # 再打安装包（需装 Inno Setup）
 ISCC.exe build\installer.iss
-# 产物：build\out\ProPainterToolbox-Setup-1.3.15.exe
+# 产物：build\out\ProPainterToolbox-Setup-1.3.16.exe
 ```
 
 > 推 `v*` 标签会自动触发 GitHub Actions（`.github/workflows/release.yml`）完成打包并发布 Release，
@@ -379,6 +390,34 @@ mp4 不支持的编码会自动转 AAC 192k）。输出统一 `yuv420p`，兼容
 **Q：输出时长变短 / 画面少了？**
 已改为按帧数精确截断（不再用 `-shortest`）。如果还遇到，脚本会打印
 `[警告] 输出时长 x != 预期 y`，把这条和 `--log-file` 的日志一起反馈。
+
+**Q：选 4x 直接报错 `_wfopen ... failed`（退出码 3221226505）？**
+`models-pro` 上游只提供 2x/3x，没有 4x 模型。v1.3.10 起会自动回退到 `models-se`，
+日志里会出现 `模型 models-pro 没有 4x，自动改用 models-se`。
+若仍报错，检查 `tools\realcugan\models-se` 下是否存在 `up4x-*.param`。
+
+**Q：编码阶段报 `No capable devices found`（退出码 3752568763）？**
+输出分辨率超过了 H.264 NVENC 的 4096 上限，例如 720p 做 4x = 5120×2880。
+v1.3.11 起会自动改用 CPU x264（日志里 `编码 5120x2880 · libx264`）。
+想继续用显卡编码，就把目标分辨率降到 4K（长边 3840）。
+
+**Q：目标分辨率怎么选？720p / 1080p 该选哪档？**
+看「输出」卡片下方的提示就行，程序会按源自动换算：
+
+| 源 | 想要的输出 | 选 |
+|---|---|---|
+| 720p | 3840×2160 | 4K（用 3x） |
+| 1080p | 3840×2160 | 4K（用 2x） |
+| 480p | 3840×2160 | 8K 或 最高（4x 封顶 3416 宽） |
+
+不知道选什么就选 4K；批量处理不同尺寸的素材时尤其适合按目标选。
+
+**Q：「输出上限」4K / 8K / 16K / 不限制 有什么区别？**
+默认 **8K**：1080p 可以用 4x（正好 7680×4320），而 4K 源只会用 2x，
+不会生成 15360×8640 这种怪物文件。
+
+- 选 **4K**：保证全程 GPU 编码（长边 ≤3840，不碰 NVENC 的 4096 上限），代价是 1080p 源只能 2x
+- 选 **16K / 不限制**：完全按 4x 跑，编码走 CPU、速度慢、文件巨大，仅适合明确要极限的场景
 
 ### 3.4 合规与许可
 
