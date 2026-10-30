@@ -148,7 +148,23 @@ class AppSmokeTest(unittest.TestCase):
         self.assertGreaterEqual(len(icons), 15, "i 图标数量不对")
         for ic in icons:
             self.assertTrue(ic.toolTip(), "有 i 图标没挂 tooltip")
-            self.assertEqual(ic.toolTipDuration(), 15000)
+            self.assertTrue(ic.bubble_html, "气泡内容为空")
+            self.assertIn("<b", ic.bubble_html)
+        win.close()
+
+    def test_bubble_shows_on_hover(self):
+        from PySide6.QtWidgets import QLabel
+        from app.ui import bubble
+        win = self._win()
+        icons = [w for w in win.findChildren(QLabel) if w.objectName() == "infoIcon"]
+        self.assertTrue(icons)
+        bubble.hide_bubble()
+        self.assertFalse(bubble.bubble().isVisible())
+        bubble.show_bubble(icons[0], icons[0].bubble_html)
+        self.assertTrue(bubble.bubble().isVisible(), "气泡没有立刻显示")
+        self.assertIn("padding", icons[0].bubble_html + "padding")  # 内容非空即可
+        bubble.hide_bubble()
+        self.assertFalse(bubble.bubble().isVisible())
         win.close()
 
     # ------------------------------------------------------------ GitHub

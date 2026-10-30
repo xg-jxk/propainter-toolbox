@@ -274,3 +274,10 @@ QPushButton#presetButton:checked {
     color: #2f6feb;
     font-weight: 600;
 }
+QLabel#helpBubble {
+    background: #1f2937;
+    color: #dbe4f3;
+    border: 1px solid #3a4a63;
+    border-radius: 8px;
+    font-size: 12px;
+}

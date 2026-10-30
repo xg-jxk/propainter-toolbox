@@ -139,7 +139,6 @@ class RepairPanel(ModuleCard):
 
     def _on_detect_changed(self, value):
         self.stack.setCurrentIndex({"auto": 0, "rect": 1, "mask": 2}.get(value, 0))
-        self.stack.setEnabled(self.is_enabled())
 
     def options(self):
         detect = self.detect.value()

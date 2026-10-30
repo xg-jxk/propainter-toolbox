@@ -9,7 +9,8 @@ import sys
 
 from PySide6.QtCore import QSharedMemory
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import (QApplication, QDialog, QMessageBox, QProxyStyle,
+                               QStyle)
 
 from pplib import __version__
 
@@ -17,6 +18,16 @@ from .core import config as cfgmod
 from .ui.mainwindow import MainWindow
 from .ui.terms_dialog import TermsDialog
 
+
+
+class _InstantTipStyle(QProxyStyle):
+    """系统 tooltip 默认要等 ~700ms；这里改成 0，悬停立刻出现。"""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint in (QStyle.StyleHint.SH_ToolTip_WakeUpDelay,
+                    QStyle.StyleHint.SH_ToolTip_FallAsleepDelay):
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
 
 def _resource(name):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", name)
@@ -36,7 +47,7 @@ def main(argv=None):
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("ProPainter Toolbox")
     app.setApplicationVersion(__version__)
-    app.setStyle("Fusion")
+    app.setStyle(_InstantTipStyle("Fusion"))
     _apply_style(app)
     icon = _resource("app.ico")
     if os.path.isfile(icon):

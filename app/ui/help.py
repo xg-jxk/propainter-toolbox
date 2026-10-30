@@ -6,6 +6,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
+from .bubble import HelpIcon
+
 # key -> (标题, 说明, 建议/默认)
 PARAM_HELP = {
     "mode": (
@@ -105,15 +107,18 @@ def tooltip_html(key):
     return html
 
 
+
+def bubble_html(key):
+    """深色气泡用的富文本（标题白、正文浅灰、建议更暗）。"""
+    title, body, tip = PARAM_HELP[key]
+    html = ("<p style='margin:0 0 6px 0'><b style='color:#ffffff;font-size:13px'>%s</b></p>"
+            "<p style='margin:0;color:#dbe4f3'>%s</p>" % (title, body))
+    if tip:
+        html += "<p style='margin:8px 0 0 0;color:#93a5c0'>%s</p>" % tip
+    return html
+
 def info_icon(key, parent=None):
-    lb = QLabel("i", parent)
-    lb.setObjectName("infoIcon")
-    lb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    lb.setFixedSize(15, 15)
-    lb.setCursor(Qt.CursorShape.WhatsThisCursor)
-    lb.setToolTip(tooltip_html(key))
-    lb.setToolTipDuration(15000)
-    return lb
+    return HelpIcon(bubble_html(key), tooltip_html(key), parent)
 
 
 def attach(widget, key):

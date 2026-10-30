@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """界面基础控件：分段选择、可折叠区、带启用开关的卡片。"""
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QGridLayout,
-                               QHBoxLayout, QRadioButton, QToolButton,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QGraphicsOpacityEffect,
+                               QGridLayout, QHBoxLayout, QRadioButton, QToolButton,
                                QVBoxLayout, QWidget)
 
 from .help import info_icon
@@ -125,11 +125,15 @@ class ModuleCard(QFrame):
         self.grid.setVerticalSpacing(8)
         outer.addWidget(self.body)
 
-        self.body.setEnabled(self.check.isChecked())
+        # 用透明度表示"未启用"，而不是 setEnabled(False)：
+        # 禁用会让子控件收不到鼠标事件，参数旁的「i」就弹不出说明了
+        self._effect = QGraphicsOpacityEffect(self.body)
+        self._effect.setOpacity(1.0 if checked else 0.45)
+        self.body.setGraphicsEffect(self._effect)
         self.check.toggled.connect(self._on_toggle)
 
     def _on_toggle(self, on):
-        self.body.setEnabled(bool(on))
+        self._effect.setOpacity(1.0 if bool(on) else 0.45)
         self.toggled.emit(bool(on))
 
     def set_enabled_state(self, on):
