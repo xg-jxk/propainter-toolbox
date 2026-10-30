@@ -326,6 +326,37 @@ class AppSmokeTest(unittest.TestCase):
         self.assertTrue(avail)
         combos = set().union(*avail.values())
         self.assertIn((2, 3), combos)
+    def test_png_size_reader(self):
+        from PIL import Image
+        from pplib.ffmpeg import _png_size
+        p = os.path.join(tempfile.mkdtemp(prefix="pppng_"), "a.png")
+        Image.new("RGB", (1234, 567)).save(p)
+        self.assertEqual(_png_size(p), (1234, 567))
+        self.assertEqual(_png_size(os.path.join(os.path.dirname(p), "nope.png")), (0, 0))
+
+    def test_encode_falls_back_over_nvenc_limit(self):
+        """5120x2880 超过 H.264 NVENC 上限，必须自动改用 libx264。"""
+        import pplib.ffmpeg as ffmod
+        from PIL import Image
+
+        d = tempfile.mkdtemp(prefix="ppenc_")
+        Image.new("RGB", (5120, 2880)).save(os.path.join(d, "00000.png"))
+        captured = {}
+        orig_run, orig_pick = ffmod.run, ffmod.pick_encoder
+        try:
+            ffmod.pick_encoder = lambda prefer="auto": "h264_nvenc"
+            ffmod.run = lambda cmd, **kw: captured.setdefault("cmd", cmd)
+            ffmod.encode_frames(d, "in.mp4", "out.mp4", 30, 1, False, encoder="auto", crf=20)
+            self.assertIn("libx264", captured["cmd"])
+            self.assertNotIn("h264_nvenc", captured["cmd"])
+
+            small = tempfile.mkdtemp(prefix="ppenc2_")
+            Image.new("RGB", (1920, 1080)).save(os.path.join(small, "00000.png"))
+            captured.clear()
+            ffmod.encode_frames(small, "in.mp4", "out2.mp4", 30, 1, False, encoder="auto", crf=20)
+            self.assertIn("h264_nvenc", captured["cmd"])
+        finally:
+            ffmod.run, ffmod.pick_encoder = orig_run, orig_pick
 
 if __name__ == "__main__":
     unittest.main()

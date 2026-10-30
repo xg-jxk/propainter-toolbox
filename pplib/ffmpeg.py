@@ -306,6 +306,33 @@ def video_encode_args(encoder, crf, preset=None):
     return ["-c:v", "libx264", "-preset", preset or "medium", "-crf", str(int(crf))]
 
 
+
+#: H.264 NVENC 的硬限制（宽/高都不能超过它）；HEVC 能到 8192
+NVENC_MAX_SIDE = 4096
+
+
+def _png_size(path):
+    """读 PNG 头拿宽高，避免为了一个尺寸去 import cv2。"""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(24)
+        if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":
+            return 0, 0
+        import struct
+        w, h = struct.unpack(">II", head[16:24])
+        return int(w), int(h)
+    except OSError:
+        return 0, 0
+
+
+def _first_frame_size(frames_dir):
+    try:
+        names = sorted(n for n in os.listdir(frames_dir) if n.lower().endswith(".png"))
+    except OSError:
+        return 0, 0
+    return _png_size(os.path.join(frames_dir, names[0])) if names else (0, 0)
+
+
 def encode_frames(frames_dir, src_video, out, fps, n_frames, has_audio,
                   encoder="auto", crf=17, preset=None, emit=None):
     """把 frames_dir 下 00000.png 起的序列加上音轨，编码成 out。
@@ -315,23 +342,45 @@ def encode_frames(frames_dir, src_video, out, fps, n_frames, has_audio,
     ff = find_ffmpeg()
     pattern = os.path.join(frames_dir, "%05d.png")
     duration = "%.3f" % (float(n_frames) / float(fps))
+
+    width, height = _first_frame_size(frames_dir)
+    enc = pick_encoder(encoder)
+    # H.264 NVENC 最大 4096；4x 放大到 5120x2880 这类尺寸只能走 CPU
+    if enc == "h264_nvenc" and (width > NVENC_MAX_SIDE or height > NVENC_MAX_SIDE):
+        if emit:
+            emit.log("[提示] 输出 %dx%d 超过 H.264 NVENC 上限 %d，自动改用 CPU x264 编码"
+                     % (width, height, NVENC_MAX_SIDE))
+            emit.log("       想继续用显卡编码，把倍率降一档（4x→2x/3x）")
+        enc = "libx264"
+        preset = preset or "veryfast"
+    if emit and width and height:
+        emit.log("编码 %dx%d · %s · crf %d" % (width, height, enc, int(crf)))
+
     head = [ff, "-hide_banner", "-loglevel", "error", "-y",
             "-framerate", "%g" % fps, "-i", pattern, "-i", str(src_video), "-map", "0:v:0"]
     if has_audio:
         head += ["-map", "1:a:0"]
-    head += video_encode_args(pick_encoder(encoder), crf, preset)
+    head += video_encode_args(enc, crf, preset)
     head += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
 
+    hint = ("若日志里出现 No capable devices found：输出分辨率超过 H.264 NVENC 上限"
+            "（宽高需 ≤%d），把编码器改成 CPU x264 或降低超分倍率" % NVENC_MAX_SIDE)
+
+    def _encode(args):
+        try:
+            run(args, emit=emit, label="编码")
+        except JobError as e:
+            raise JobError(str(e), hint)
+
     if not has_audio:
-        run(head + [out], emit=emit, label="编码")
+        _encode(head + [out])
         return
     try:
-        run(head + ["-c:a", "copy", "-t", duration, out], emit=emit, label="编码")
+        _encode(head + ["-c:a", "copy", "-t", duration, out])
     except JobError:
         if emit:
             emit.log("音轨无法直接拷贝，改用 AAC 重新编码 ...")
-        run(head + ["-c:a", "aac", "-b:a", "192k", "-t", duration, out],
-            emit=emit, label="编码")
+        _encode(head + ["-c:a", "aac", "-b:a", "192k", "-t", duration, out])
 
 
 def now():
