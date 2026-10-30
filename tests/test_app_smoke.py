@@ -215,7 +215,7 @@ class AppSmokeTest(unittest.TestCase):
         from app.ui import bubble
 
         win = self._win()
-        bubble.install(self.app)
+        bubble.watch_tree(win)
         bubble.hide_bubble()
         btn = win._preset_buttons["fast"]
         self.assertTrue(btn.toolTip())
@@ -234,7 +234,7 @@ class AppSmokeTest(unittest.TestCase):
         from app.ui import bubble
 
         win = self._win()
-        bubble.install(self.app)
+        bubble.watch_tree(win)
         bubble.hide_bubble()
         btn = win._preset_buttons["balanced"]
         ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), QPoint(300, 300))

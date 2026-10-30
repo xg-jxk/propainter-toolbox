@@ -22,6 +22,7 @@ from ..core.bridge import JobRunner
 from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
                           STATUS_PENDING, STATUS_RUNNING, STATUS_SKIPPED,
                           JobQueue)
+from . import bubble as bubble_ui
 from .help import checkbox_with_info, info_icon
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
@@ -100,6 +101,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 640)
 
         self._build_ui()
+        bubble_ui.watch_tree(self)      # 只为有 tooltip 的控件装气泡过滤器
         self._apply_config()
         self._refresh_runtime()
         self._connect()

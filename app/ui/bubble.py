@@ -287,9 +287,39 @@ _filter = None
 
 
 def install(app):
-    """在 QApplication 上装一次，整个应用的气泡就统一了。"""
+    """兼容旧接口：不再装到 QApplication（会偶发访问冲突），改为无操作。
+
+    真正的安装入口是 watch() / watch_tree()。
+    """
+    return _ensure_filter()
+
+
+def watch(widget):
+    """给单个控件装气泡过滤器（比装到 QApplication 上安全）。"""
+    filt = _ensure_filter()
+    try:
+        widget.installEventFilter(filt)
+    except Exception:
+        pass
+    return widget
+
+
+def watch_tree(root):
+    """给 root 及其子控件里所有带 tooltip 的控件装过滤器。"""
+    from PySide6.QtWidgets import QAbstractItemView, QWidget
+
+    for w in [root] + list(root.findChildren(QWidget)):
+        try:
+            if isinstance(w, HelpIcon):
+                continue          # 「i」自己处理
+            if isinstance(w, QAbstractItemView) or w.toolTip() or w.property("bubble_html"):
+                watch(w)
+        except Exception:
+            continue
+
+
+def _ensure_filter():
     global _filter
     if _filter is None:
-        _filter = _TooltipFilter(app)
-        app.installEventFilter(_filter)
+        _filter = _TooltipFilter()
     return _filter

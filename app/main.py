@@ -7,15 +7,14 @@
 import os
 import sys
 
-from PySide6.QtCore import QSharedMemory, Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import QSharedMemory, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QApplication, QDialog, QMessageBox, QProxyStyle,
-                               QSplashScreen, QStyle)
+                               QStyle)
 
 from pplib import __version__
 
 from .core import applog
-from .ui import bubble as bubble_ui
 from .core import config as cfgmod
 from .ui.mainwindow import MainWindow
 from .ui.terms_dialog import TermsDialog
@@ -50,7 +49,6 @@ def main(argv=None):
     app.setApplicationName("ProPainter Toolbox")
     app.setApplicationVersion(__version__)
     app.setStyle(_InstantTipStyle("Fusion"))
-    bubble_ui.install(app)  # 全应用统一气泡，替掉原生 tooltip
     _apply_style(app)
     icon = _resource("app.ico")
     if os.path.isfile(icon):
@@ -72,25 +70,41 @@ def main(argv=None):
         cfg["terms_version"] = cfgmod.TERMS_VERSION
         cfgmod.save(cfg)
 
-    splash = None
-    if os.path.isfile(icon):
-        pix = QIcon(icon).pixmap(320, 320)
-        if not pix.isNull():
-            splash = QSplashScreen(pix)
-            splash.showMessage("ProPainter 工具箱 v%s · 正在启动…" % __version__,
-                               Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-                               Qt.GlobalColor.white)
-            splash.show()
-            app.processEvents()
+    # 日志与崩溃转储尽早就位：原生崩溃也能留下线索
+    applog.setup()
+    _enable_faulthandler()
+    applog.write("启动 v%s · Python %s" % (__version__, sys.version.split()[0]))
 
     win = MainWindow(cfg)
     win.show()
-    if splash is not None:
-        splash.finish(win)
-    win.start_env_probe()      # 后台探测，不阻塞首屏
-    applog.setup()
-    applog.write("启动 v%s · Python %s" % (__version__, sys.version.split()[0]))
+    # 探测延后一拍再启动，避免与窗口映射抢事件循环（1.3.18 的启动崩溃嫌疑）
+    QTimer.singleShot(150, _start_probe_safe)
     return app.exec()
+
+
+def _start_probe_safe():
+    try:
+        from .ui.mainwindow import MainWindow  # noqa: F401
+        for widget in QApplication.topLevelWidgets():
+            probe = getattr(widget, "start_env_probe", None)
+            if callable(probe):
+                probe()
+                return
+    except Exception:
+        import traceback
+        applog.write("环境探测启动失败：\n" + traceback.format_exc())
+
+
+def _enable_faulthandler():
+    """把原生崩溃（访问冲突等）的栈写到 logs/crash.log。"""
+    try:
+        import faulthandler
+        path = os.path.join(applog.log_dir(), "crash.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fh = open(path, "a", encoding="utf-8")
+        faulthandler.enable(file=fh, all_threads=True)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
