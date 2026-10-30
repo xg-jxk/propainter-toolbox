@@ -220,6 +220,30 @@ class AppSmokeTest(unittest.TestCase):
         bubble.hide_bubble()
         self.assertFalse(bubble.bubble().isVisible())
         win.close()
+    def test_tooltip_no_flicker_on_repeat(self):
+        """鼠标移动时 Qt 会重复发 ToolTip 事件，不能让气泡反复 show/hide。"""
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QHelpEvent
+        from app.ui import bubble
+
+        win = self._win()
+        bubble.install(self.app)
+        bubble.hide_bubble()
+        btn = win._preset_buttons["balanced"]
+        ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), QPoint(300, 300))
+        self.app.notify(btn, ev)
+        self.assertTrue(bubble.bubble().isVisible())
+        text = bubble.bubble().text()
+        # 连发三次，气泡应保持可见且内容不变
+        for _ in range(3):
+            self.app.notify(btn, ev)
+            self.assertTrue(bubble.bubble().isVisible(), "重复事件把气泡关掉了")
+        self.assertEqual(bubble.bubble().text(), text)
+        # 宽限期内收到 Leave 不应立刻隐藏
+        self.app.notify(btn, QEvent(QEvent.Type.Leave))
+        self.assertTrue(bubble.bubble().isVisible(), "Leave 后立刻隐藏了（会闪）")
+        bubble.hide_bubble()
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

@@ -281,3 +281,8 @@ QLabel#helpBubble {
     border-radius: 8px;
     font-size: 12px;
 }
+QFrame#presetBar {
+    background: #f5f8ff;
+    border: 1px solid #dbe3f3;
+    border-radius: 10px;
+}

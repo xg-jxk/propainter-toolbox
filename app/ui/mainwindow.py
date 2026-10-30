@@ -20,7 +20,7 @@ from ..core import envcheck
 from ..core.bridge import JobRunner
 from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
                           STATUS_PENDING, STATUS_RUNNING, JobQueue)
-from .help import checkbox_with_info
+from .help import checkbox_with_info, info_icon
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
 from .panels import PRESETS, OutputPanel, RepairPanel, SRPanel
@@ -186,11 +186,19 @@ class MainWindow(QMainWindow):
         rv.setContentsMargins(0, 0, 6, 0)
         rv.setSpacing(10)
 
+        preset_bar = QFrame()
+        preset_bar.setObjectName("presetBar")
+        bar_lay = QVBoxLayout(preset_bar)
+        bar_lay.setContentsMargins(12, 9, 12, 9)
+        bar_lay.setSpacing(6)
+
         preset_row = QHBoxLayout()
         preset_row.setSpacing(6)
-        preset_title = QLabel("预设")
+        preset_title = QLabel("整体档位")
         preset_title.setObjectName("sectionTitle")
         preset_row.addWidget(preset_title)
+        preset_row.addWidget(info_icon("preset"))
+        preset_row.addSpacing(4)
         self.preset_group = QButtonGroup(self)
         self.preset_group.setExclusive(True)
         self._preset_buttons = {}
@@ -205,11 +213,13 @@ class MainWindow(QMainWindow):
             self._preset_buttons[key] = btn
             preset_row.addWidget(btn)
         preset_row.addStretch(1)
-        rv.addLayout(preset_row)
+        bar_lay.addLayout(preset_row)
+
         self.preset_hint = QLabel(PRESETS["balanced"]["desc"])
         self.preset_hint.setObjectName("hintLabel")
         self.preset_hint.setWordWrap(True)
-        rv.addWidget(self.preset_hint)
+        bar_lay.addWidget(self.preset_hint)
+        rv.addWidget(preset_bar)
 
         self.repair_panel = RepairPanel()
         self.sr_panel = SRPanel()

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """即时气泡说明：鼠标一进入就弹出，不依赖系统 tooltip 的 ~700ms 延迟。"""
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt
-from PySide6.QtGui import QTextDocument
+from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, Qt
+from PySide6.QtGui import QCursor, QTextDocument
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QLabel)
 
 BUBBLE_MAX_WIDTH = 380
@@ -151,15 +151,10 @@ def _plain(html):
         return str(html)
 
 
-def _text_for(widget, event):
+
+def _text_for_host(widget):
+    """从控件（或它的祖先）取气泡文案：优先浅色版 bubble_html。"""
     try:
-        if isinstance(widget, QAbstractItemView):
-            index = widget.indexAt(event.pos())
-            if index.isValid():
-                tip = index.data(Qt.ItemDataRole.ToolTipRole)
-                return _as_html(tip) if tip else ""
-            return ""
-        # 控件可以预先挂一份"专门给气泡用"的浅色文案
         rich = widget.property("bubble_html")
         if rich:
             return str(rich)
@@ -169,40 +164,124 @@ def _text_for(widget, event):
     if not tip:
         return ""
     if "<" in tip and ">" in tip:
-        tip = _plain(tip)      # 原生 tooltip 的深色样式 → 纯文本
+        tip = _plain(tip)
     return _as_html(tip)
+
+def _text_for(widget, event):
+    try:
+        if isinstance(widget, QAbstractItemView):
+            index = widget.indexAt(event.pos())
+            if index.isValid():
+                tip = index.data(Qt.ItemDataRole.ToolTipRole)
+                return _as_html(tip) if tip else ""
+            return ""
+    except Exception:
+        return ""
+    return _text_for_host(widget)
 
 
 class _TooltipFilter(QObject):
-    """把 app 内所有原生 tooltip 换成自绘气泡。"""
+    """把 app 内所有原生 tooltip 换成自绘气泡。
 
-    _HIDE_ON = (
-        QEvent.Type.Leave,
-        QEvent.Type.Hide,
+    防闪烁要点：
+      1. 同一个"提示宿主"上重复收到的 ToolTip 事件直接吞掉，不再 show()
+      2. 离开控件不立刻隐藏，留 140ms 宽限；期间进入子控件/相邻控件会被取消
+      3. 位置只在切换宿主时更新，鼠标在控件内移动不会让气泡跳来跳去
+    """
+
+    GRACE_MS = 140
+
+    _HIDE_NOW = (
         QEvent.Type.Wheel,
         QEvent.Type.MouseButtonPress,
         QEvent.Type.FocusOut,
         QEvent.Type.WindowDeactivate,
     )
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._owner = None
+        self._html = ""
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(self.GRACE_MS)
+        self._hide_timer.timeout.connect(self._maybe_hide)
+
+    # ---------------------------------------------------------- 工具
+    @staticmethod
+    def _host(widget):
+        """向上找一个"有说明"的控件：控件自己或它的祖先。"""
+        cur = widget
+        while cur is not None:
+            try:
+                if cur.property("bubble_html") or cur.toolTip():
+                    return cur
+            except Exception:
+                pass
+            cur = cur.parentWidget()
+        return None
+
+    @staticmethod
+    def _inside(widget):
+        if widget is None:
+            return False
+        try:
+            return widget.rect().contains(widget.mapFromGlobal(QCursor.pos()))
+        except Exception:
+            return False
+
+    def _maybe_hide(self):
+        if self._inside(self._owner):
+            # 还在宿主范围里（可能只是移到了子控件），不隐藏
+            self._hide_timer.start(self.GRACE_MS)
+            return
+        hide_bubble()
+        self._owner = None
+        self._html = ""
+
+    def _resolve(self, widget, event):
+        host = self._host(widget)
+        if host is None:
+            return None, ""
+        if host is widget:
+            html = _text_for(widget, event)
+        else:
+            html = _text_for_host(host)
+        return host, html
+
+    # ---------------------------------------------------------- 事件
     def eventFilter(self, obj, event):
         try:
             etype = event.type()
         except Exception:
             return False
+
         if etype == QEvent.Type.ToolTip:
             if isinstance(obj, HelpIcon):
-                return False  # 「i」自己处理（内容更详细）
-            html = _text_for(obj, event)
-            if html:
-                show_at(event.globalPos(), html)
-                return True
+                return False          # 「i」自己处理
+            host, html = self._resolve(obj, event)
+            if not html:
+                return True           # 宿主没有说明：吞掉，别让系统气泡冒出来
+            if host is self._owner and bubble().isVisible():
+                return True           # 同一个宿主：不重新显示，避免闪烁
+            self._hide_timer.stop()
+            self._owner = host
+            self._html = html
+            show_at(event.globalPos(), html)
+            return True
+
+        if etype in self._HIDE_NOW:
+            self._hide_timer.stop()
+            self._owner = None
             hide_bubble()
             return False
-        if etype in self._HIDE_ON:
-            hide_bubble()
-        return False
 
+        if etype in (QEvent.Type.Leave, QEvent.Type.Hide):
+            if self._owner is not None:
+                self._hide_timer.start(self.GRACE_MS)
+            return False
+
+        return False
 
 _filter = None
 
