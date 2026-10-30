@@ -491,5 +491,38 @@ class AppSmokeTest(unittest.TestCase):
         open(pyw, "w").close()
         self.assertEqual(JobRunner._quiet_python(py), pyw)
 
+    def test_reset_restores_defaults(self):
+        """一键重置：参数回默认，队列不受影响。"""
+        win = self._win()
+        win.queue.add_paths([self._tmp_video()])
+        win._rebuild_table()
+
+        win.repair_panel.padding.setValue(1.2)
+        win.repair_panel.subvideo.setValue(120)
+        win.sr_panel.set_enabled_state(True)
+        win.sr_panel.set_target("max")
+        win.sr_panel.set_cap(0)
+        win.output_panel.crf.setValue(30)
+        win.output_panel.test_mode.setChecked(True)
+        win.keep.setChecked(True)
+        win.open_when_done.setChecked(False)
+        win._apply_preset("fast")
+
+        win.reset_params()
+
+        self.assertAlmostEqual(win.repair_panel.padding.value(), 0.45, places=2)
+        self.assertEqual(win.repair_panel.subvideo.value(), 40)
+        self.assertFalse(win.sr_panel.is_enabled())
+        self.assertEqual(win.sr_panel.target_key(), "4K")
+        self.assertEqual(win.sr_panel.cap_limit(), 7680)
+        self.assertEqual(win.output_panel.crf_value(), 17)
+        self.assertFalse(win.output_panel.test_mode.isChecked())
+        self.assertFalse(win.keep.isChecked())
+        self.assertTrue(win.open_when_done.isChecked())
+        self.assertEqual(win._current_preset(), "balanced")
+        self.assertEqual(len(win.queue), 1)      # 队列不清空
+        win.close()
+
+
 if __name__ == "__main__":
     unittest.main()

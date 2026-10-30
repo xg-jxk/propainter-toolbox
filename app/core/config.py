@@ -10,24 +10,36 @@ APP_DIR_NAME = "ProPainterToolbox"
 TERMS_VERSION = 1
 
 DEFAULTS = {
-    "mode": "repair",        # repair | sr | pipeline
-    "detect": "auto",        # auto | rect | mask
+    "repair_enabled": True,
+    "sr_enabled": False,
+    "detect": "auto",            # auto | rect | mask
     "rect": "",
     "mask": "",
     "padding": 0.45,
     "subvideo": 40,
-    "neighbor": 10,
+    "mask_dilation": 2,
+    "detect_thr": 0.62,
+    "ref_stride": 12,
+    "sr_target": "4K",           # 1080p | 2K | 4K | 8K | max
+    "sr_max_output": 7680,       # 0 = 不限制
+    "denoise": "auto",           # auto | -1 | 0 | 1 | 2 | 3
+    "model": "models-pro",
+    "out_dir": "",               # 空 = 与源视频同目录
     "crf": 17,
     "encoder": "auto",
-    "scale": 2,
-    "denoise": "auto",       # auto | -1 | 0 | 1 | 2 | 3
-    "out_dir": "",           # 空 = 与源视频同目录
-    "workdir": "",           # 留空用系统临时目录
+    "test_mode": False,
+    "test_seconds": 3,
+    "test_start": 0.0,
     "keep": False,
     "open_when_done": True,
+    "preset": "balanced",
+    "advanced_open": False,
+    "log_open": False,
+    "mode": "repair",            # 旧版字段，仅用于迁移
+    "workdir": "",
     "last_dir": "",
     "terms_version": 0,
-    "window": {"w": 1000, "h": 760},
+    "window": {"w": 1180, "h": 820},
 }
 
 

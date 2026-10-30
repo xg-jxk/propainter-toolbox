@@ -262,9 +262,12 @@ class MainWindow(QMainWindow):
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setEnabled(False)
         self.open_btn = QPushButton("打开输出目录")
+        self.reset_btn = QPushButton("重置参数")
+        self.reset_btn.setToolTip("把所有参数恢复为初始值（不会清空待处理队列）")
         prow.addWidget(self.start_btn)
         prow.addWidget(self.cancel_btn)
         prow.addWidget(self.open_btn)
+        prow.addWidget(self.reset_btn)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         prow.addWidget(self.progress, 1)
@@ -298,6 +301,7 @@ class MainWindow(QMainWindow):
         self.start_btn.clicked.connect(self.start_queue)
         self.cancel_btn.clicked.connect(self.cancel_current)
         self.open_btn.clicked.connect(self.open_output)
+        self.reset_btn.clicked.connect(self.reset_params)
 
         self.repair_panel.btn_mask.clicked.connect(self.pick_mask)
         self.output_panel.btn_outdir.clicked.connect(self.pick_outdir)
@@ -712,6 +716,49 @@ class MainWindow(QMainWindow):
         self.set_running(True)
         self._start_next()
 
+    def reset_params(self):
+        """一键恢复所有参数初始值（不动队列、不动窗口大小）。"""
+        d = cfgmod.DEFAULTS
+        self.repair_panel.set_enabled_state(d["repair_enabled"])
+        self.sr_panel.set_enabled_state(d["sr_enabled"])
+        self.repair_panel.detect.set_value(d["detect"])
+        self.repair_panel.rect.setText(d["rect"])
+        self.repair_panel.mask.setText(d["mask"])
+        self.repair_panel.padding.setValue(float(d["padding"]))
+        self.repair_panel.subvideo.setValue(int(d["subvideo"]))
+        self.repair_panel.mask_dilation.setValue(int(d["mask_dilation"]))
+        self.repair_panel.detect_thr.setValue(float(d["detect_thr"]))
+        self.repair_panel.ref_stride.setValue(int(d["ref_stride"]))
+        self.sr_panel.set_target(str(d["sr_target"]))
+        self.sr_panel.set_cap(int(d["sr_max_output"]))
+        idx = self.sr_panel.denoise.findData(str(d["denoise"]))
+        if idx >= 0:
+            self.sr_panel.denoise.setCurrentIndex(idx)
+        idx = self.sr_panel.model.findData(str(d["model"]))
+        if idx >= 0:
+            self.sr_panel.model.setCurrentIndex(idx)
+        self.output_panel.out_dir.setText(d["out_dir"])
+        self.output_panel.crf.setValue(int(d["crf"]))
+        idx = self.output_panel.encoder.findData(str(d["encoder"]))
+        if idx >= 0:
+            self.output_panel.encoder.setCurrentIndex(idx)
+        self.output_panel.test_mode.setChecked(bool(d["test_mode"]))
+        self.output_panel.test_seconds.setValue(int(d["test_seconds"]))
+        self.output_panel.test_start.setValue(float(d["test_start"]))
+        self.keep.setChecked(bool(d["keep"]))
+        self.open_when_done.setChecked(bool(d["open_when_done"]))
+        preset = str(d.get("preset", "balanced"))
+        if preset in self._preset_buttons:
+            self._preset_buttons[preset].setChecked(True)
+            self.preset_hint.setText(PRESETS[preset]["desc"])
+        self._sync_scale_labels()
+        self._on_modules_changed()
+        self._update_preview()
+        self.cfg.update(self._collect_config())
+        cfgmod.save(self.cfg)
+        self.append_log("参数已重置为初始值（队列未清空）")
+        self.status_label.setText("参数已重置")
+
     def _log_target_summary(self):
         if not len(self.queue):
             return
@@ -875,7 +922,7 @@ class MainWindow(QMainWindow):
     def set_running(self, running):
         for w in (self.start_btn, self.btn_add, self.btn_clear, self.btn_remove,
                   self.drop, self.repair_panel, self.sr_panel, self.output_panel,
-                  self.keep, self.open_when_done):
+                  self.keep, self.open_when_done, self.reset_btn):
             w.setEnabled(not running)
         for btn in self._preset_buttons.values():
             btn.setEnabled(not running)
