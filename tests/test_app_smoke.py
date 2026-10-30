@@ -299,6 +299,33 @@ class AppSmokeTest(unittest.TestCase):
                                   "size": 100, "elapsed": 2})
         self.assertEqual(win.queue[0].status, "完成（预览）")
         win.close()
+    def test_realcugan_model_fallback(self):
+        """models-pro 没有 4x，必须自动落到 models-se；缺降噪档取最近。"""
+        from pplib.events import JobError
+        from pplib.sr import resolve_model
+
+        avail = {
+            "models-pro": {(2, -1), (2, 0), (2, 3), (3, -1), (3, 0), (3, 3)},
+            "models-se": {(2, -1), (2, 0), (2, 1), (2, 2), (2, 3),
+                          (3, -1), (3, 0), (3, 3),
+                          (4, -1), (4, 0), (4, 3)},
+        }
+        self.assertEqual(resolve_model(avail, "models-pro", 4, 3), ("models-se", 4, 3))
+        self.assertEqual(resolve_model(avail, "models-pro", 4, 1), ("models-se", 4, 0))
+        self.assertEqual(resolve_model(avail, "models-pro", 2, 3), ("models-pro", 2, 3))
+        with self.assertRaises(JobError):
+            resolve_model(avail, "models-pro", 8, 3)
+
+    def test_scan_real_models(self):
+        from pplib.ffmpeg import ROOT
+        from pplib.sr import scan_models
+        root = os.path.join(str(ROOT), "tools", "realcugan")
+        if not os.path.isdir(root):
+            self.skipTest("没有安装 Real-CUGAN")
+        avail = scan_models(root)
+        self.assertTrue(avail)
+        combos = set().union(*avail.values())
+        self.assertIn((2, 3), combos)
 
 if __name__ == "__main__":
     unittest.main()

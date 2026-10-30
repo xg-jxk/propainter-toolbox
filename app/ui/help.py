@@ -92,8 +92,8 @@ PARAM_HELP = {
     ),
     "model": (
         "超分模型",
-        "models-pro 细节更好、速度略慢；models-se 更保守、纹理更平。",
-        "默认 models-pro。",
+        "models-pro 细节更好、速度略慢，但上游只提供 2x/3x；models-se 更保守、纹理更平，4x 只能用 se。",
+        "默认 models-pro；选 4x 时会自动切到 models-se，日志里会写明。",
     ),
     "keep": (
         "保留中间文件",
