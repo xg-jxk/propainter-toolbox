@@ -39,7 +39,7 @@ DEFAULTS = {
     "workdir": "",
     "last_dir": "",
     "terms_version": 0,
-    "window": {"w": 1180, "h": 820},
+    "window": {"w": 1360, "h": 860},
 }
 
 

@@ -5,6 +5,7 @@ import time
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
+                               QGridLayout,
                                QFileDialog, QFrame, QHBoxLayout, QHeaderView,
                                QLabel, QMainWindow, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton, QScrollArea,
@@ -97,7 +98,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("ProPainter 工具箱 v%s" % __version__)
         win_cfg = self.cfg.get("window", {})
-        self.resize(int(win_cfg.get("w", 1180)), int(win_cfg.get("h", 820)))
+        self.resize(int(win_cfg.get("w", 1360)), int(win_cfg.get("h", 860)))
         self.setMinimumSize(900, 640)
 
         self._build_ui()
@@ -187,13 +188,16 @@ class MainWindow(QMainWindow):
         right = QScrollArea()
         right.setWidgetResizable(True)
         right.setFrameShape(QFrame.Shape.NoFrame)
-        right.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         inner = QWidget()
-        rv = QVBoxLayout(inner)
-        rv.setContentsMargins(0, 0, 6, 0)
-        rv.setSpacing(10)
+        self._settings_grid = QGridLayout(inner)
+        self._settings_grid.setContentsMargins(0, 0, 6, 0)
+        self._settings_grid.setHorizontalSpacing(14)
+        self._settings_grid.setVerticalSpacing(14)
+        self._two_cols = None          # 未知，首次 resize 时决定
 
         preset_bar = QFrame()
+        self.preset_bar = preset_bar
         preset_bar.setObjectName("presetBar")
         bar_lay = QVBoxLayout(preset_bar)
         bar_lay.setContentsMargins(12, 9, 12, 9)
@@ -226,31 +230,31 @@ class MainWindow(QMainWindow):
         self.preset_hint.setObjectName("hintLabel")
         self.preset_hint.setWordWrap(True)
         bar_lay.addWidget(self.preset_hint)
-        rv.addWidget(preset_bar)
 
         self.repair_panel = RepairPanel()
         self.sr_panel = SRPanel()
         self.output_panel = OutputPanel()
-        rv.addWidget(self.repair_panel)
-        rv.addWidget(self.sr_panel)
-        rv.addWidget(self.output_panel)
 
-        opts = QHBoxLayout()
+        opts_wrap = QWidget()
+        opts = QHBoxLayout(opts_wrap)
+        opts.setContentsMargins(2, 0, 0, 0)
         opts.setSpacing(16)
         self.keep = QCheckBox("保留中间文件（排障用）")
         opts.addWidget(checkbox_with_info(self.keep, "keep"))
         self.open_when_done = QCheckBox("完成后自动打开输出目录")
         opts.addWidget(checkbox_with_info(self.open_when_done, "open_when_done"))
         opts.addStretch(1)
-        rv.addLayout(opts)
-        rv.addStretch(1)
+        self.options_row = opts_wrap
+
         right.setWidget(inner)
+        self._right_scroll = right
+        self._relayout_settings(True)
 
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([660, 480])
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 5)
+        splitter.setSizes([600, 720])
         root.addWidget(splitter, 1)
 
         # ---------- 进度与操作
@@ -308,7 +312,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.toggled.connect(self._on_modules_changed)
         self.sr_panel.toggled.connect(self._on_modules_changed)
 
-        self.repair_panel.detect.changed.connect(self._update_preview)
+        self.repair_panel.detect.currentIndexChanged.connect(self._update_preview)
         self.repair_panel.padding.valueChanged.connect(self._update_preview)
         self.repair_panel.rect.textChanged.connect(self._update_preview)
         self.sr_panel.target.currentIndexChanged.connect(self._update_preview)
@@ -324,6 +328,56 @@ class MainWindow(QMainWindow):
         self.runner.progressChanged.connect(self._on_progress)
         self.runner.finished.connect(self._on_finished)
 
+    # ================================================================ 布局
+    def _relayout_settings(self, two_columns):
+        """把设置区摆成双列或单列（窗口窄时回退）。"""
+        if getattr(self, "_two_cols", None) == two_columns:
+            return
+        self._two_cols = two_columns
+        grid = self._settings_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            if item.widget() is not None:
+                item.widget().setParent(self._right_scroll.widget())
+        for col in (0, 1):
+            grid.setColumnStretch(col, 0)
+        for row in range(4):
+            grid.setRowStretch(row, 0)
+
+        grid.addWidget(self.preset_bar, 0, 0, 1, 2)
+        if two_columns:
+            # 上排：修复 | 超分（两张窄卡并排）；输出卡片本身较宽，横跨两列
+            grid.addWidget(self.repair_panel, 1, 0)
+            grid.addWidget(self.sr_panel, 1, 1)
+            grid.addWidget(self.output_panel, 2, 0, 1, 2)
+            grid.addWidget(self.options_row, 3, 0, 1, 2)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            grid.setRowStretch(4, 1)
+            grid.setRowStretch(3, 0)
+        else:
+            grid.addWidget(self.repair_panel, 1, 0, 1, 2)
+            grid.addWidget(self.sr_panel, 2, 0, 1, 2)
+            grid.addWidget(self.output_panel, 3, 0, 1, 2)
+            grid.addWidget(self.options_row, 4, 0, 1, 2)
+            grid.setColumnStretch(0, 1)
+            grid.setRowStretch(5, 1)
+        for w in (self.preset_bar, self.repair_panel, self.sr_panel,
+                  self.output_panel, self.options_row):
+            w.show()
+
+    def _maybe_relayout(self):
+        try:
+            width = self._right_scroll.viewport().width()
+        except Exception:
+            return
+        self._relayout_settings(width >= 700)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "_settings_grid", None) is not None:
+            self._maybe_relayout()
+
     # ================================================================ 配置
     def _apply_config(self):
         c = self.cfg
@@ -333,7 +387,7 @@ class MainWindow(QMainWindow):
             c["sr_enabled"] = mode in ("sr", "pipeline")
         self.repair_panel.set_enabled_state(bool(c.get("repair_enabled", True)))
         self.sr_panel.set_enabled_state(bool(c.get("sr_enabled", False)))
-        self.repair_panel.detect.set_value(c.get("detect", "auto"))
+        self.repair_panel.set_detect(c.get("detect", "auto"))
         self.repair_panel.rect.setText(c.get("rect", ""))
         self.repair_panel.mask.setText(c.get("mask", ""))
         self.repair_panel.padding.setValue(float(c.get("padding", 0.45)))
@@ -372,7 +426,7 @@ class MainWindow(QMainWindow):
         return {
             "repair_enabled": self.repair_panel.is_enabled(),
             "sr_enabled": self.sr_panel.is_enabled(),
-            "detect": self.repair_panel.detect.value(),
+            "detect": self.repair_panel.detect_value(),
             "rect": self.repair_panel.rect.text().strip(),
             "mask": self.repair_panel.mask.text().strip(),
             "padding": round(self.repair_panel.padding.value(), 2),
@@ -683,7 +737,7 @@ class MainWindow(QMainWindow):
         if len(self.queue) == 0:
             QMessageBox.information(self, "提示", "先把视频拖进来吧")
             return
-        detect = self.repair_panel.detect.value()
+        detect = self.repair_panel.detect_value()
         if self.repair_panel.is_enabled() and detect == "rect" \
                 and not self.repair_panel.rect.text().strip():
             QMessageBox.warning(self, "缺少矩形", "选了「手动矩形」，请填写 x,y,w,h")
@@ -721,7 +775,7 @@ class MainWindow(QMainWindow):
         d = cfgmod.DEFAULTS
         self.repair_panel.set_enabled_state(d["repair_enabled"])
         self.sr_panel.set_enabled_state(d["sr_enabled"])
-        self.repair_panel.detect.set_value(d["detect"])
+        self.repair_panel.set_detect(d["detect"])
         self.repair_panel.rect.setText(d["rect"])
         self.repair_panel.mask.setText(d["mask"])
         self.repair_panel.padding.setValue(float(d["padding"]))

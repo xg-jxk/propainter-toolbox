@@ -232,7 +232,7 @@ QRadioButton#segButton {
     background: #ffffff;
     border: 1px solid #d3daea;
     border-radius: 6px;
-    padding: 4px 12px;
+    padding: 6px 14px;
     color: #4a5568;
 }
 
@@ -285,4 +285,14 @@ QFrame#presetBar {
     background: #f5f8ff;
     border: 1px solid #dbe3f3;
     border-radius: 10px;
+}
+
+/* ---- 间距 token：输入控件统一高度、提示文字小一号 ---- */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    min-height: 26px;
+}
+
+QLabel#hintLabel {
+    color: #6b7488;
+    font-size: 12px;
 }

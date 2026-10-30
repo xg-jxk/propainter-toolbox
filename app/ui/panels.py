@@ -138,9 +138,9 @@ class RepairPanel(ModuleCard):
         super().__init__("区域修复（字幕 / 台标 / 杂物 / 角标）", "mode", checked=enabled, parent=parent)
         g = self.grid
 
-        self.detect = SegmentedControl(DETECT_OPTIONS, "auto")
+        self.detect = _combo(DETECT_OPTIONS, "auto")
         g.addWidget(label_with_info("定位方式", "detect"), 0, 0)
-        g.addWidget(attach(self.detect, "detect"), 0, 1, 1, 3)
+        g.addWidget(attach(self.detect, "detect"), 0, 1)
 
         self.stack = QStackedWidget()
         hint = QLabel("自动在画面四角寻找浅色角标 / 文字，适合大多数情况")
@@ -206,14 +206,24 @@ class RepairPanel(ModuleCard):
         adv.addWidget(attach(self.ref_stride, "ref_stride"), 1, 3)
         g.addWidget(self.advanced, 3, 0, 1, 4)
 
-        self.detect.changed.connect(self._on_detect_changed)
+        self.detect.currentIndexChanged.connect(self._on_detect_changed)
         self._on_detect_changed("auto")
 
-    def _on_detect_changed(self, value):
+    def _on_detect_changed(self, _idx=None):
+        value = self.detect.currentData() or "auto"
         self.stack.setCurrentIndex({"auto": 0, "rect": 1, "mask": 2}.get(value, 0))
+        self.stack.setEnabled(True)
+
+    def detect_value(self):
+        return self.detect.currentData() or "auto"
+
+    def set_detect(self, key):
+        idx = self.detect.findData(key)
+        if idx >= 0:
+            self.detect.setCurrentIndex(idx)
 
     def options(self):
-        detect = self.detect.value()
+        detect = self.detect_value()
         return {
             "auto": detect == "auto",
             "rect": self.rect.text().strip() if detect == "rect" else None,
@@ -253,7 +263,7 @@ class SRPanel(ModuleCard):
             self.cap.addItem(text, value)
 
         self.target = QComboBox()
-        self.target.setMinimumWidth(300)
+        self.target.setMinimumWidth(230)
         g.addWidget(label_with_info("目标分辨率", "scale"), 0, 0)
         g.addWidget(attach(self.target, "scale"), 0, 1, 1, 3)
         self.scale_hint = QLabel("加入视频后按源长边自动换算倍率")
@@ -441,8 +451,8 @@ class OutputPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("moduleCard")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 10, 12, 12)
-        outer.setSpacing(8)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(10)
 
         head = QHBoxLayout()
         title = QLabel("输出")
