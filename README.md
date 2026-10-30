@@ -282,6 +282,8 @@ ISCC.exe build\installer.iss
 
 > 推 `v*` 标签会自动触发 GitHub Actions（`.github/workflows/release.yml`）完成打包并发布 Release，
 > 本地不需要出包；也可以手动运行 `make.ps1` 只出 exe 自测。
+>
+> 完整发布步骤（GitHub 自动 + Gitee 手动、两个 API 坑、发版清单）见 **[docs/RELEASE.md](docs/RELEASE.md)**。
 
 要点：**只打包 GUI 外壳**（PySide6，约 110 MB），不打包 torch/cv2；运行期通过 `PP_ROOT`
 定位 `.venv` / `weights`，所以换机器后首次启动仍会引导在线安装。

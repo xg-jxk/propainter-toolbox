@@ -49,7 +49,7 @@ jobs:
           body: |
             ## ProPainter 视频修复工具箱 ${{ github.ref_name }}
 
-            便携版（约 44 MB）：解压后双击 `ProPainterToolbox.exe`，
+            便携版（约 49 MB）：解压后双击 `ProPainterToolbox.exe`，
             首次启动会引导**在线安装运行时**（PyTorch + 模型权重，约 2.5 GB）。
 
             - 下载后请先看包内的 `首次使用.txt`
