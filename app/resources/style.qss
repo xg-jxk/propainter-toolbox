@@ -206,3 +206,71 @@ QToolButton#ghButton:hover {
     border-color: #2f6feb;
     color: #2f6feb;
 }
+/* ---- 卡片 / 分段按钮 / 预设 ---- */
+QFrame#moduleCard {
+    background: #ffffff;
+    border: 1px solid #e2e7f2;
+    border-radius: 10px;
+}
+
+QCheckBox#cardTitle {
+    font-weight: 600;
+    color: #3d4a63;
+    spacing: 6px;
+}
+
+QLabel#sectionTitle {
+    font-weight: 600;
+    color: #3d4a63;
+}
+
+QLabel#hintLabel {
+    color: #6b7488;
+}
+
+QRadioButton#segButton {
+    background: #ffffff;
+    border: 1px solid #d3daea;
+    border-radius: 6px;
+    padding: 4px 12px;
+    color: #4a5568;
+}
+
+QRadioButton#segButton:hover {
+    border-color: #2f6feb;
+    color: #2f6feb;
+}
+
+QRadioButton#segButton:checked {
+    background: #2f6feb;
+    border-color: #2f6feb;
+    color: #ffffff;
+}
+
+QRadioButton#segButton::indicator {
+    width: 0;
+    height: 0;
+}
+
+QToolButton#advButton {
+    border: none;
+    color: #5b6472;
+    padding: 2px 0;
+    background: transparent;
+}
+
+QToolButton#advButton:hover {
+    color: #2f6feb;
+}
+
+QPushButton#presetButton {
+    border-radius: 14px;
+    padding: 5px 14px;
+}
+
+QPushButton#presetButton:checked {
+    background: #e6efff;
+    border-color: #2f6feb;
+    color: #2f6feb;
+    font-weight: 600;
+}

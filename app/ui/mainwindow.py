@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""主窗口：拖拽 → 队列（≤20）→ 逐个跑 pplib.runner → 进度/日志/取消。"""
+"""主窗口：左边队列、右边设置（区域修复 / 超分 / 输出），底部进度与日志。"""
 import os
 import time
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
-                               QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
-                               QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-                               QProgressBar, QPushButton, QSpinBox, QTableWidget,
-                               QTableWidgetItem, QToolButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
+                               QFileDialog, QFrame, QHBoxLayout, QHeaderView,
+                               QLabel, QMainWindow, QMessageBox, QPlainTextEdit,
+                               QProgressBar, QPushButton, QScrollArea,
+                               QSplitter, QTableWidget, QTableWidgetItem,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from pplib import __version__
 from pplib.ffmpeg import ROOT
@@ -21,17 +20,12 @@ from ..core import envcheck
 from ..core.bridge import JobRunner
 from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
                           STATUS_PENDING, STATUS_RUNNING, JobQueue)
-from .help import attach, checkbox_with_info, label_with_info
+from .help import checkbox_with_info
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
+from .panels import PRESETS, OutputPanel, RepairPanel, SRPanel
 from .terms_dialog import TermsDialog
-
-MODE_LABELS = [("区域修复", "repair"), ("超分", "sr"), ("区域修复 + 超分", "pipeline")]
-ENCODER_LABELS = [("自动（有 NVENC 就用）", "auto"),
-                  ("NVIDIA NVENC", "nvenc"), ("CPU x264", "x264")]
-DETECT_LABELS = [("自动检测", "auto"), ("手动矩形", "rect"), ("逐帧掩码", "mask")]
-DENOISE_LABELS = [("自动", "auto"), ("-1 不降噪", "-1"), ("0 保守", "0"),
-                  ("1 轻", "1"), ("2 中", "2"), ("3 强", "3")]
+from .widgets import Collapsible
 
 COL_FILE, COL_STATUS, COL_PCT, COL_ELAPSED, COL_OUT = range(5)
 
@@ -55,7 +49,7 @@ class DropArea(QFrame):
         super().__init__(parent)
         self.setObjectName("dropArea")
         self.setAcceptDrops(True)
-        self.setMinimumHeight(96)
+        self.setMinimumHeight(84)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 10, 16, 10)
@@ -97,32 +91,39 @@ class MainWindow(QMainWindow):
         self._last_out = ""
 
         self.setWindowTitle("ProPainter 工具箱 v%s" % __version__)
-        self.resize(int(self.cfg.get("window", {}).get("w", 1000)),
-                    int(self.cfg.get("window", {}).get("h", 760)))
+        win_cfg = self.cfg.get("window", {})
+        self.resize(int(win_cfg.get("w", 1180)), int(win_cfg.get("h", 820)))
+        self.setMinimumSize(900, 640)
+
         self._build_ui()
         self._apply_config()
         self._refresh_runtime()
         self._connect()
+        self._on_modules_changed()
+        self._update_preview()
 
     # ================================================================ UI
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(16, 14, 16, 14)
+        root.setContentsMargins(16, 12, 16, 12)
         root.setSpacing(10)
 
-        # ---- 标题行
+        # ---------- 顶部
         head = QHBoxLayout()
+        head.setSpacing(10)
         title = QLabel("ProPainter 工具箱")
         title.setObjectName("title")
         head.addWidget(title)
         self.runtime_label = QLabel("")
         self.runtime_label.setObjectName("runtime")
         head.addWidget(self.runtime_label, 1)
+
         self.btn_install = QPushButton("安装运行时")
         self.btn_install.setObjectName("primary")
         head.addWidget(self.btn_install)
+
         self.btn_github = QToolButton()
         self.btn_github.setObjectName("ghButton")
         self.btn_github.setText("GitHub")
@@ -132,29 +133,36 @@ class MainWindow(QMainWindow):
         self.btn_github.setToolTip("在 GitHub 上查看源码、下载新版本、反馈问题")
         self.btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
         head.addWidget(self.btn_github)
+
         self.btn_terms = QPushButton("使用条款")
         head.addWidget(self.btn_terms)
         self.btn_env = QPushButton("环境信息")
         head.addWidget(self.btn_env)
         root.addLayout(head)
 
-        # ---- 拖拽区
-        self.drop = DropArea()
-        root.addWidget(self.drop)
+        # ---------- 主体：左队列 / 右设置
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
-        # ---- 队列
-        qbox = QGroupBox("待处理队列")
-        qlay = QVBoxLayout(qbox)
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(8)
+
+        self.drop = DropArea()
+        lv.addWidget(self.drop)
+
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["文件", "状态", "进度", "用时", "输出"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(COL_FILE, QHeaderView.ResizeMode.Stretch)
         for col in (COL_STATUS, COL_PCT, COL_ELAPSED, COL_OUT):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        qlay.addWidget(self.table)
+        lv.addWidget(self.table, 1)
 
         qrow = QHBoxLayout()
         self.btn_add = QPushButton("添加文件…")
@@ -165,125 +173,100 @@ class MainWindow(QMainWindow):
         qrow.addWidget(self.btn_clear)
         qrow.addStretch(1)
         self.queue_label = QLabel("0 / 20")
+        self.queue_label.setObjectName("hintLabel")
         qrow.addWidget(self.queue_label)
-        qlay.addLayout(qrow)
-        root.addWidget(qbox, 2)
+        lv.addLayout(qrow)
 
-        # ---- 参数（每个参数带「i」，悬停看说明）
-        pbox = QGroupBox("处理参数")
-        grid = QGridLayout(pbox)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-        for col in (1, 3, 5):
-            grid.setColumnStretch(col, 1)
+        right = QScrollArea()
+        right.setWidgetResizable(True)
+        right.setFrameShape(QFrame.Shape.NoFrame)
+        right.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = QWidget()
+        rv = QVBoxLayout(inner)
+        rv.setContentsMargins(0, 0, 6, 0)
+        rv.setSpacing(10)
 
-        self.mode = QComboBox()
-        for label, key in MODE_LABELS:
-            self.mode.addItem(label, key)
-        grid.addWidget(label_with_info("模式", "mode"), 0, 0)
-        grid.addWidget(attach(self.mode, "mode"), 0, 1)
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(6)
+        preset_title = QLabel("预设")
+        preset_title.setObjectName("sectionTitle")
+        preset_row.addWidget(preset_title)
+        self.preset_group = QButtonGroup(self)
+        self.preset_group.setExclusive(True)
+        self._preset_buttons = {}
+        for key, preset in PRESETS.items():
+            btn = QPushButton(preset["title"])
+            btn.setObjectName("presetButton")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(preset["desc"])
+            btn.clicked.connect(lambda _=False, k=key: self._apply_preset(k))
+            self.preset_group.addButton(btn)
+            self._preset_buttons[key] = btn
+            preset_row.addWidget(btn)
+        preset_row.addStretch(1)
+        rv.addLayout(preset_row)
+        self.preset_hint = QLabel(PRESETS["balanced"]["desc"])
+        self.preset_hint.setObjectName("hintLabel")
+        self.preset_hint.setWordWrap(True)
+        rv.addWidget(self.preset_hint)
 
-        self.detect = QComboBox()
-        for label, key in DETECT_LABELS:
-            self.detect.addItem(label, key)
-        grid.addWidget(label_with_info("区域定位", "detect"), 0, 2)
-        grid.addWidget(attach(self.detect, "detect"), 0, 3)
+        self.repair_panel = RepairPanel()
+        self.sr_panel = SRPanel()
+        self.output_panel = OutputPanel()
+        rv.addWidget(self.repair_panel)
+        rv.addWidget(self.sr_panel)
+        rv.addWidget(self.output_panel)
 
-        self.rect = QLineEdit()
-        self.rect.setPlaceholderText("x,y,w,h  例如 1314,918,320,120")
-        grid.addWidget(label_with_info("矩形", "rect"), 0, 4)
-        grid.addWidget(attach(self.rect, "rect"), 0, 5)
-
-        self.mask = QLineEdit()
-        self.mask.setPlaceholderText("掩码目录，或单张掩码 png")
-        self.btn_mask = QPushButton("选择…")
-        self.btn_mask.setFixedWidth(64)
-        maskrow = QHBoxLayout()
-        maskrow.setContentsMargins(0, 0, 0, 0)
-        maskrow.addWidget(self.mask, 1)
-        maskrow.addWidget(self.btn_mask)
-        grid.addWidget(label_with_info("掩码", "mask"), 1, 0)
-        grid.addLayout(maskrow, 1, 1, 1, 5)
-
-        self.padding = QDoubleSpinBox()
-        self.padding.setRange(0.0, 1.5)
-        self.padding.setSingleStep(0.05)
-        self.padding.setDecimals(2)
-        grid.addWidget(label_with_info("外扩 padding", "padding"), 2, 0)
-        grid.addWidget(attach(self.padding, "padding"), 2, 1)
-
-        self.subvideo = QSpinBox()
-        self.subvideo.setRange(10, 200)
-        self.subvideo.setSuffix(" 帧")
-        grid.addWidget(label_with_info("分段 subvideo", "subvideo"), 2, 2)
-        grid.addWidget(attach(self.subvideo, "subvideo"), 2, 3)
-
-        self.crf = QSpinBox()
-        self.crf.setRange(0, 51)
-        grid.addWidget(label_with_info("画质 crf", "crf"), 2, 4)
-        grid.addWidget(attach(self.crf, "crf"), 2, 5)
-
-        self.encoder = QComboBox()
-        for label, key in ENCODER_LABELS:
-            self.encoder.addItem(label, key)
-        grid.addWidget(label_with_info("编码器", "encoder"), 3, 0)
-        grid.addWidget(attach(self.encoder, "encoder"), 3, 1)
-
-        self.scale = QComboBox()
-        for s in (2, 3, 4):
-            self.scale.addItem("%dx" % s, s)
-        grid.addWidget(label_with_info("超分倍率", "scale"), 3, 2)
-        grid.addWidget(attach(self.scale, "scale"), 3, 3)
-
-        self.denoise = QComboBox()
-        for label, key in DENOISE_LABELS:
-            self.denoise.addItem(label, key)
-        grid.addWidget(label_with_info("降噪", "denoise"), 3, 4)
-        grid.addWidget(attach(self.denoise, "denoise"), 3, 5)
-
-        self.out_dir = QLineEdit()
-        self.out_dir.setPlaceholderText("留空 = 与源视频同目录")
-        self.btn_outdir = QPushButton("选择…")
-        self.btn_outdir.setFixedWidth(64)
-        outrow = QHBoxLayout()
-        outrow.setContentsMargins(0, 0, 0, 0)
-        outrow.addWidget(self.out_dir, 1)
-        outrow.addWidget(self.btn_outdir)
-        grid.addWidget(label_with_info("输出目录", "out_dir"), 4, 0)
-        grid.addLayout(outrow, 4, 1, 1, 5)
-
+        opts = QHBoxLayout()
+        opts.setSpacing(16)
         self.keep = QCheckBox("保留中间文件（排障用）")
-        grid.addWidget(checkbox_with_info(self.keep, "keep"), 5, 1, 1, 2)
+        opts.addWidget(checkbox_with_info(self.keep, "keep"))
         self.open_when_done = QCheckBox("完成后自动打开输出目录")
-        grid.addWidget(checkbox_with_info(self.open_when_done, "open_when_done"), 5, 3, 1, 3)
-        root.addWidget(pbox)
+        opts.addWidget(checkbox_with_info(self.open_when_done, "open_when_done"))
+        opts.addStretch(1)
+        rv.addLayout(opts)
+        rv.addStretch(1)
+        right.setWidget(inner)
 
-        # ---- 进度与操作
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([660, 480])
+        root.addWidget(splitter, 1)
+
+        # ---------- 进度与操作
         prow = QHBoxLayout()
+        prow.setSpacing(10)
         self.start_btn = QPushButton("开始处理")
         self.start_btn.setObjectName("primary")
+        self.start_btn.setMinimumWidth(120)
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setEnabled(False)
         self.open_btn = QPushButton("打开输出目录")
         prow.addWidget(self.start_btn)
         prow.addWidget(self.cancel_btn)
         prow.addWidget(self.open_btn)
-        prow.addStretch(1)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        self.progress.setFixedWidth(280)
-        prow.addWidget(self.progress)
+        prow.addWidget(self.progress, 1)
         self.status_label = QLabel("就绪")
+        self.status_label.setObjectName("hintLabel")
+        self.status_label.setMinimumWidth(170)
         prow.addWidget(self.status_label)
         root.addLayout(prow)
 
-        # ---- 日志
+        # ---------- 日志（可折叠，出错自动展开）
+        self.log_box = Collapsible("运行日志", expanded=False)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(6000)
         self.log.setObjectName("log")
         self.log.setPlaceholderText("运行日志会显示在这里")
-        root.addWidget(self.log, 1)
+        self.log.setMinimumHeight(120)
+        self.log_box.grid.addWidget(self.log, 0, 0)
+        root.addWidget(self.log_box)
 
     def _connect(self):
         self.drop.filesDropped.connect(self.add_files)
@@ -291,8 +274,6 @@ class MainWindow(QMainWindow):
         self.btn_add.clicked.connect(self.pick_files)
         self.btn_remove.clicked.connect(self.remove_selected)
         self.btn_clear.clicked.connect(self.clear_queue)
-        self.btn_mask.clicked.connect(self.pick_mask)
-        self.btn_outdir.clicked.connect(self.pick_outdir)
         self.btn_install.clicked.connect(self.open_install)
         self.btn_terms.clicked.connect(self.show_terms)
         self.btn_github.clicked.connect(lambda: open_url(PROJECT_URL))
@@ -300,8 +281,18 @@ class MainWindow(QMainWindow):
         self.start_btn.clicked.connect(self.start_queue)
         self.cancel_btn.clicked.connect(self.cancel_current)
         self.open_btn.clicked.connect(self.open_output)
-        self.mode.currentIndexChanged.connect(self._sync_mode)
-        self.detect.currentIndexChanged.connect(self._sync_mode)
+
+        self.repair_panel.btn_mask.clicked.connect(self.pick_mask)
+        self.output_panel.btn_outdir.clicked.connect(self.pick_outdir)
+        self.repair_panel.toggled.connect(self._on_modules_changed)
+        self.sr_panel.toggled.connect(self._on_modules_changed)
+
+        self.repair_panel.detect.changed.connect(self._update_preview)
+        self.repair_panel.padding.valueChanged.connect(self._update_preview)
+        self.repair_panel.rect.textChanged.connect(self._update_preview)
+        self.sr_panel.scale.changed.connect(self._update_preview)
+        self.output_panel.out_dir.textChanged.connect(self._update_preview)
+        self.output_panel.crf.valueChanged.connect(self._update_preview)
 
         self.runner.logLine.connect(self.append_log)
         self.runner.stageChanged.connect(self._on_stage)
@@ -311,80 +302,140 @@ class MainWindow(QMainWindow):
     # ================================================================ 配置
     def _apply_config(self):
         c = self.cfg
-        self._set_combo(self.mode, c.get("mode", "repair"))
-        self._set_combo(self.detect, c.get("detect", "auto"))
-        self.rect.setText(c.get("rect", ""))
-        self.mask.setText(c.get("mask", ""))
-        self.padding.setValue(float(c.get("padding", 0.45)))
-        self.subvideo.setValue(int(c.get("subvideo", 40)))
-        self.crf.setValue(int(c.get("crf", 17)))
-        self._set_combo(self.encoder, c.get("encoder", "auto"))
-        self._set_combo(self.scale, int(c.get("scale", 2)))
-        self._set_combo(self.denoise, str(c.get("denoise", "auto")))
-        self.out_dir.setText(c.get("out_dir", ""))
+        if "repair_enabled" not in c and "sr_enabled" not in c:
+            mode = str(c.get("mode", "repair"))
+            c["repair_enabled"] = mode in ("repair", "pipeline")
+            c["sr_enabled"] = mode in ("sr", "pipeline")
+        self.repair_panel.set_enabled_state(bool(c.get("repair_enabled", True)))
+        self.sr_panel.set_enabled_state(bool(c.get("sr_enabled", False)))
+        self.repair_panel.detect.set_value(c.get("detect", "auto"))
+        self.repair_panel.rect.setText(c.get("rect", ""))
+        self.repair_panel.mask.setText(c.get("mask", ""))
+        self.repair_panel.padding.setValue(float(c.get("padding", 0.45)))
+        self.repair_panel.subvideo.setValue(int(c.get("subvideo", 40)))
+        self.repair_panel.mask_dilation.setValue(int(c.get("mask_dilation", 2)))
+        self.repair_panel.detect_thr.setValue(float(c.get("detect_thr", 0.62)))
+        self.repair_panel.ref_stride.setValue(int(c.get("ref_stride", 12)))
+        self.sr_panel.scale.set_value(int(c.get("scale", 2)))
+        idx = self.sr_panel.denoise.findData(str(c.get("denoise", "auto")))
+        if idx < 0:
+            idx = self.sr_panel.denoise.findData(c.get("denoise", "auto"))
+        if idx >= 0:
+            self.sr_panel.denoise.setCurrentIndex(idx)
+        idx = self.sr_panel.model.findData(c.get("model", "models-pro"))
+        if idx >= 0:
+            self.sr_panel.model.setCurrentIndex(idx)
+        self.output_panel.out_dir.setText(c.get("out_dir", ""))
+        self.output_panel.crf.setValue(int(c.get("crf", 17)))
+        idx = self.output_panel.encoder.findData(c.get("encoder", "auto"))
+        if idx >= 0:
+            self.output_panel.encoder.setCurrentIndex(idx)
         self.keep.setChecked(bool(c.get("keep", False)))
         self.open_when_done.setChecked(bool(c.get("open_when_done", True)))
-        self._sync_mode()
+        preset = str(c.get("preset", "balanced"))
+        if preset in self._preset_buttons:
+            self._preset_buttons[preset].setChecked(True)
+            self.preset_hint.setText(PRESETS[preset]["desc"])
+        self.repair_panel.advanced.set_expanded(bool(c.get("advanced_open", False)))
+        self.log_box.set_expanded(bool(c.get("log_open", False)))
 
     def _collect_config(self):
         return {
-            "mode": self.mode.currentData(),
-            "detect": self.detect.currentData(),
-            "rect": self.rect.text().strip(),
-            "mask": self.mask.text().strip(),
-            "padding": round(self.padding.value(), 2),
-            "subvideo": self.subvideo.value(),
-            "neighbor": int(self.cfg.get("neighbor", 10)),
-            "crf": self.crf.value(),
-            "encoder": self.encoder.currentData(),
-            "scale": int(self.scale.currentData()),
-            "denoise": str(self.denoise.currentData()),
-            "out_dir": self.out_dir.text().strip(),
-            "workdir": self.cfg.get("workdir", ""),
+            "repair_enabled": self.repair_panel.is_enabled(),
+            "sr_enabled": self.sr_panel.is_enabled(),
+            "detect": self.repair_panel.detect.value(),
+            "rect": self.repair_panel.rect.text().strip(),
+            "mask": self.repair_panel.mask.text().strip(),
+            "padding": round(self.repair_panel.padding.value(), 2),
+            "subvideo": self.repair_panel.subvideo.value(),
+            "mask_dilation": self.repair_panel.mask_dilation.value(),
+            "detect_thr": round(self.repair_panel.detect_thr.value(), 2),
+            "ref_stride": self.repair_panel.ref_stride.value(),
+            "scale": int(self.sr_panel.scale.value() or 2),
+            "denoise": str(self.sr_panel.denoise.currentData()),
+            "model": self.sr_panel.model.currentData(),
+            "out_dir": self.output_panel.out_dir_text(),
+            "crf": self.output_panel.crf_value(),
+            "encoder": self.output_panel.encoder_value(),
             "keep": self.keep.isChecked(),
             "open_when_done": self.open_when_done.isChecked(),
+            "preset": self._current_preset(),
+            "advanced_open": self.repair_panel.advanced.is_expanded(),
+            "log_open": self.log_box.is_expanded(),
             "last_dir": self.cfg.get("last_dir", ""),
             "window": {"w": self.width(), "h": self.height()},
         }
 
-    @staticmethod
-    def _set_combo(combo, value):
-        idx = combo.findData(value)
-        if idx >= 0:
-            combo.setCurrentIndex(idx)
+    def _current_preset(self):
+        for key, btn in self._preset_buttons.items():
+            if btn.isChecked():
+                return key
+        return ""
 
-    def _sync_mode(self):
-        mode = self.mode.currentData()
-        detect = self.detect.currentData()
-        is_wm = mode in ("repair", "pipeline")
-        is_sr = mode in ("sr", "pipeline")
-        for w in (self.detect,):
-            w.setEnabled(is_wm)
-        self.rect.setEnabled(is_wm and detect == "rect")
-        self.mask.setEnabled(is_wm and detect == "mask")
-        self.btn_mask.setEnabled(is_wm and detect == "mask")
-        self.padding.setEnabled(is_wm)
-        self.subvideo.setEnabled(is_wm)
-        self.scale.setEnabled(is_sr)
-        self.denoise.setEnabled(is_sr)
+    # ================================================================ 模式与预览
+    def _mode(self):
+        repair = self.repair_panel.is_enabled()
+        sr = self.sr_panel.is_enabled()
+        if repair and sr:
+            return "pipeline"
+        if repair:
+            return "repair"
+        if sr:
+            return "sr"
+        return None
+
+    def _on_modules_changed(self, *_):
+        mode = self._mode()
+        if mode is None:
+            self.status_label.setText("至少启用一项")
+            self.status_label.setStyleSheet("color:#c62828")
+        else:
+            self.status_label.setText("就绪")
+            self.status_label.setStyleSheet("")
+        self.start_btn.setEnabled(bool(mode) and len(self.queue) > 0
+                                   and not self.runner.is_running())
+        self._update_preview()
+
+    def _update_preview(self, *_):
+        video = self.queue[0].path if len(self.queue) else os.path.join("D:\\video", "a.mp4")
+        mode = self._mode() or "repair"
+        scale = int(self.sr_panel.scale.value() or 2)
+        path = self.output_panel.out_path(video, mode, scale)
+        if not path:
+            path = default_out(video, mode, scale)
+        where = os.path.dirname(path)
+        name = os.path.basename(path)
+        if self.output_panel.out_dir_text():
+            self.output_panel.set_preview("将输出：%s\n到 %s" % (name, where))
+        else:
+            self.output_panel.set_preview("将输出：%s（与源视频同目录）" % name)
+
+    def _apply_preset(self, key):
+        preset = PRESETS.get(key)
+        if not preset:
+            return
+        btn = self._preset_buttons.get(key)
+        if btn is not None and not btn.isChecked():
+            btn.setChecked(True)
+        self.repair_panel.apply_preset(preset)
+        self.output_panel.crf.setValue(int(preset["crf"]))
+        self.preset_hint.setText(preset["desc"])
+        self._update_preview()
 
     # ================================================================ 运行时
     def _refresh_runtime(self):
         self.runtime = envcheck.check()
         st = self.runtime
         if st.ready:
-            gpu = st.gpu_text()
-            text = "运行时就绪 · %s" % gpu
+            self.runtime_label.setText("运行时就绪 · %s" % st.gpu_text())
             self.runtime_label.setStyleSheet("color:#2e7d32")
             self.btn_install.setVisible(False)
-            self.start_btn.setEnabled(len(self.queue) > 0)
         else:
-            text = "缺少运行时：%s" % st.missing_text()
+            self.runtime_label.setText("缺少运行时：%s" % st.missing_text())
             self.runtime_label.setStyleSheet("color:#c62828")
             self.btn_install.setVisible(True)
-            self.start_btn.setEnabled(False)
-        self.runtime_label.setText(text)
         self.runtime_label.setToolTip(st.gpu_text() + ("\n支持 NVENC" if st.nvenc else ""))
+        self._on_modules_changed()
 
     def open_install(self):
         dlg = InstallDialog(self)
@@ -402,20 +453,14 @@ class MainWindow(QMainWindow):
     def show_env(self):
         st = self.runtime
         info = envcheck.torch_info(st.venv_python)
-        text = ("<b>Python</b>：%s<br>"
-                "<b>torch</b>：%s<br>"
-                "<b>显卡</b>：%s<br>"
-                "<b>NVENC</b>：%s<br>"
-                "<b>权重</b>：%s<br>"
-                "<b>Real-CUGAN</b>：%s<br>"
-                "<b>ffmpeg</b>：%s<br>"
-                "<b>项目目录</b>：%s"
+        text = ("<b>Python</b>：%s<br><b>torch</b>：%s<br><b>显卡</b>：%s<br>"
+                "<b>NVENC</b>：%s<br><b>权重</b>：%s<br><b>Real-CUGAN</b>：%s<br>"
+                "<b>ffmpeg</b>：%s<br><b>项目目录</b>：%s"
                 % (st.venv_python, info, st.gpu_text(),
                    "支持" if st.nvenc else "不支持",
                    "齐全" if st.weights_ok else ("缺少 " + "、".join(st.weights_missing)),
                    "已安装" if st.cugan_ok else "未安装",
-                   "可用" if st.ffmpeg_ok else "不可用",
-                   ROOT))
+                   "可用" if st.ffmpeg_ok else "不可用", ROOT))
         QMessageBox.information(self, "环境信息", text)
 
     # ================================================================ 队列
@@ -440,6 +485,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "有文件未加入",
                                 "队列上限 20 个，以下文件没加入：\n\n" + "\n".join(lines))
         self._refresh_queue_label()
+        self._update_preview()
 
     def remove_selected(self):
         rows = sorted({i.row() for i in self.table.selectedItems()}, reverse=True)
@@ -452,6 +498,7 @@ class MainWindow(QMainWindow):
             self.queue.remove(r)
         self._rebuild_table()
         self._refresh_queue_label()
+        self._update_preview()
 
     def clear_queue(self):
         if self.runner.is_running():
@@ -460,11 +507,12 @@ class MainWindow(QMainWindow):
         self.queue.clear()
         self._rebuild_table()
         self._refresh_queue_label()
+        self._update_preview()
 
     def _refresh_queue_label(self):
         self.queue_label.setText("%d / 20" % len(self.queue))
-        if self.runtime.ready:
-            self.start_btn.setEnabled(len(self.queue) > 0 and not self.runner.is_running())
+        self.start_btn.setEnabled(bool(self._mode()) and len(self.queue) > 0
+                                  and not self.runner.is_running())
 
     def _rebuild_table(self):
         items = self.queue.items()
@@ -479,45 +527,33 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, COL_FILE, name)
         self.table.setItem(row, COL_STATUS, QTableWidgetItem(item.status))
         self.table.setItem(row, COL_PCT, QTableWidgetItem("%d%%" % int(item.pct)))
-        self.table.setItem(row, COL_ELAPSED, QTableWidgetItem(
-            "%.0fs" % item.elapsed if item.elapsed else ""))
+        self.table.setItem(row, COL_ELAPSED,
+                           QTableWidgetItem("%.0fs" % item.elapsed if item.elapsed else ""))
         out = QTableWidgetItem(item.out or item.message)
         out.setToolTip(item.out or item.message)
         self.table.setItem(row, COL_OUT, out)
 
     # ================================================================ 处理
     def _build_spec(self, video):
-        mode = self.mode.currentData()
-        detect = self.detect.currentData()
-        denoise = self.denoise.currentData()
-        wm = {
-            "auto": detect == "auto",
-            "rect": self.rect.text().strip() if detect == "rect" else None,
-            "mask": self.mask.text().strip() if detect == "mask" else None,
-            "padding": round(self.padding.value(), 2),
-            "subvideo": self.subvideo.value(),
-            "neighbor": int(self.cfg.get("neighbor", 10)),
-            "ref_stride": 12,
-            "mask_dilation": 2,
-            "crf": self.crf.value(),
-            "encoder": self.encoder.currentData(),
-            "keep": self.keep.isChecked(),
+        mode = self._mode()
+        if mode is None:
+            raise ValueError("至少启用区域修复或超分")
+        repair = self.repair_panel.options()
+        sr = self.sr_panel.options()
+        repair["crf"] = self.output_panel.crf_value()
+        repair["encoder"] = self.output_panel.encoder_value()
+        repair["keep"] = self.keep.isChecked()
+        sr["crf"] = self.output_panel.crf_value()
+        sr["encoder"] = self.output_panel.encoder_value()
+        sr["keep"] = self.keep.isChecked()
+        return {
+            "mode": mode,
+            "video": video,
+            "out": self.output_panel.out_path(video, mode, sr["scale"]),
+            "intermediate_crf": 12,
+            "repair": repair,
+            "sr": sr,
         }
-        sr = {
-            "scale": int(self.scale.currentData()),
-            "denoise": None if denoise == "auto" else int(denoise),
-            "crf": self.crf.value(),
-            "encoder": self.encoder.currentData(),
-            "keep": self.keep.isChecked(),
-        }
-        out = None
-        out_dir = self.out_dir.text().strip()
-        if out_dir:
-            base = default_out(video, mode, sr["scale"])
-            os.makedirs(out_dir, exist_ok=True)
-            out = os.path.join(out_dir, os.path.basename(base))
-        return {"mode": mode, "video": video, "out": out,
-                "intermediate_crf": 12, "repair": wm, "sr": sr}
 
     def start_queue(self):
         if self.runner.is_running():
@@ -528,14 +564,19 @@ class MainWindow(QMainWindow):
                                     % self.runtime.missing_text()) == QMessageBox.StandardButton.Yes:
                 self.open_install()
             return
+        if self._mode() is None:
+            QMessageBox.warning(self, "没有启用的模块", "请至少勾选「区域修复」或「超分」。")
+            return
         if len(self.queue) == 0:
             QMessageBox.information(self, "提示", "先把视频拖进来吧")
             return
-        detect = self.detect.currentData()
-        if detect == "rect" and not self.rect.text().strip():
+        detect = self.repair_panel.detect.value()
+        if self.repair_panel.is_enabled() and detect == "rect" \
+                and not self.repair_panel.rect.text().strip():
             QMessageBox.warning(self, "缺少矩形", "选了「手动矩形」，请填写 x,y,w,h")
             return
-        if detect == "mask" and not os.path.exists(self.mask.text().strip() or "x"):
+        if self.repair_panel.is_enabled() and detect == "mask" \
+                and not os.path.exists(self.repair_panel.mask.text().strip() or "x"):
             QMessageBox.warning(self, "找不到掩码", "请选择掩码文件或目录")
             return
 
@@ -545,7 +586,9 @@ class MainWindow(QMainWindow):
         self._t_start = time.time()
         self.cfg.update(self._collect_config())
         cfgmod.save(self.cfg)
-        self.append_log("===== 开始处理 %d 个文件 =====" % len(self.queue))
+        if not self.log_box.is_expanded():
+            self.log_box.set_expanded(True)
+        self.append_log("===== 开始处理 %d 个文件（%s）=====" % (len(self.queue), self._mode()))
         self.set_running(True)
         self._start_next()
 
@@ -566,7 +609,7 @@ class MainWindow(QMainWindow):
 
     def _on_stage(self, name, pct):
         self.progress.setValue(int(pct))
-        self.status_label.setText("%s · %s" % (name, "%d%%" % int(pct)))
+        self.status_label.setText("%s · %d%%" % (name, int(pct)))
         if self._current is not None:
             item = self.queue[self._current]
             item.pct = pct
@@ -575,7 +618,8 @@ class MainWindow(QMainWindow):
     def _on_progress(self, cur, total, pct, eta, note):
         self.progress.setValue(int(pct))
         eta_txt = _fmt_eta(eta)
-        self.status_label.setText("%s %d/%d · %s" % (note or "", cur, total, eta_txt or "%d%%" % int(pct)))
+        self.status_label.setText("%s %d/%d · %s"
+                                  % (note or "", cur, total, eta_txt or "%d%%" % int(pct)))
         if self._current is not None:
             item = self.queue[self._current]
             item.pct = pct
@@ -592,7 +636,8 @@ class MainWindow(QMainWindow):
             item.pct = 100
             item.elapsed = float(payload.get("elapsed") or 0)
             self._last_out = item.out
-            self.append_log("✔ 完成：%s（%s）" % (item.out, self._size_text(payload.get("size"))))
+            self.append_log("✔ 完成：%s（%s）"
+                            % (item.out, self._size_text(payload.get("size"))))
         elif state == "cancelled":
             item.status = STATUS_CANCELLED
             item.message = "已取消"
@@ -604,6 +649,8 @@ class MainWindow(QMainWindow):
             self.append_log("✖ 失败：%s —— %s" % (item.name, item.message))
             if payload.get("hint"):
                 self.append_log("   %s" % payload["hint"])
+            if not self.log_box.is_expanded():
+                self.log_box.set_expanded(True)
         self._fill_row(self._current, item)
         self._current = None
         if self._cancel_all:
@@ -626,7 +673,6 @@ class MainWindow(QMainWindow):
         self.set_running(False)
         done = sum(1 for it in self.queue if it.status == STATUS_DONE)
         failed = sum(1 for it in self.queue if it.status in (STATUS_FAILED, STATUS_CANCELLED))
-        self.progress.setValue(100 if not failed else self.progress.value())
         self.status_label.setText("完成 %d 个，失败/取消 %d 个" % (done, failed))
         self.append_log("===== 队列结束：成功 %d，失败/取消 %d，总用时 %.0fs ====="
                         % (done, failed, time.time() - self._t_start))
@@ -643,13 +689,14 @@ class MainWindow(QMainWindow):
 
     def set_running(self, running):
         for w in (self.start_btn, self.btn_add, self.btn_clear, self.btn_remove,
-                  self.mode, self.detect, self.rect, self.mask, self.padding,
-                  self.subvideo, self.crf, self.encoder, self.scale, self.denoise,
-                  self.out_dir, self.keep, self.open_when_done):
+                  self.drop, self.repair_panel, self.sr_panel, self.output_panel,
+                  self.keep, self.open_when_done):
             w.setEnabled(not running)
+        for btn in self._preset_buttons.values():
+            btn.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
         if not running:
-            self._sync_mode()
+            self._on_modules_changed()
             self._refresh_queue_label()
 
     def append_log(self, text):
@@ -660,20 +707,22 @@ class MainWindow(QMainWindow):
 
     # ================================================================ 其它
     def pick_mask(self):
-        if os.path.isdir(self.mask.text().strip() or ""):
-            d = QFileDialog.getExistingDirectory(self, "选择掩码目录", self.mask.text())
+        current = self.repair_panel.mask.text().strip()
+        if os.path.isdir(current or ""):
+            d = QFileDialog.getExistingDirectory(self, "选择掩码目录", current)
             if d:
-                self.mask.setText(d)
+                self.repair_panel.mask.setText(d)
             return
-        f, _ = QFileDialog.getOpenFileName(self, "选择掩码（单张 png 或目录里的任意一张）",
+        f, _ = QFileDialog.getOpenFileName(self, "选择掩码（单张 png，或目录里的任意一张）",
                                            "", "PNG (*.png);;所有文件 (*.*)")
         if f:
-            self.mask.setText(f)
+            self.repair_panel.mask.setText(f)
 
     def pick_outdir(self):
-        d = QFileDialog.getExistingDirectory(self, "选择输出目录", self.out_dir.text())
+        d = QFileDialog.getExistingDirectory(self, "选择输出目录",
+                                             self.output_panel.out_dir_text())
         if d:
-            self.out_dir.setText(d)
+            self.output_panel.out_dir.setText(d)
 
     def open_output(self):
         target = self._last_out or ""
@@ -682,7 +731,7 @@ class MainWindow(QMainWindow):
             if done:
                 target = done[-1].out
         if not target:
-            d = self.out_dir.text().strip()
+            d = self.output_panel.out_dir_text()
             if d and os.path.isdir(d):
                 target = d
         if not target:

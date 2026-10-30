@@ -37,6 +37,10 @@ def app_dir():
 
 
 def config_path():
+    # 测试/多实例可用环境变量覆盖，避免污染用户真实配置
+    override = os.environ.get("PPTOOLBOX_CONFIG")
+    if override:
+        return override
     return os.path.join(app_dir(), "config.json")
 
 
