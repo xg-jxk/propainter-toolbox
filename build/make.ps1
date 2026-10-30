@@ -6,16 +6,21 @@
 #         powershell ... -File build\make.ps1 -SkipInstall -Zip   # 同时产出便携包
 param(
     [switch]$SkipInstall,
-    [switch]$Zip
+    [switch]$Zip,
+    [string]$Python = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$py = Join-Path $Root ".venv\Scripts\python.exe"
+if ($Python) {
+    $py = $Python
+} else {
+    $py = Join-Path $Root ".venv\Scripts\python.exe"
+}
 if (-not (Test-Path -LiteralPath $py)) {
-    throw "找不到 .venv：先运行 setup.cmd 准备运行环境"
+    throw "找不到 Python：$py（先运行 setup.cmd，或用 -Python 指定解释器）"
 }
 
 $version = (& $py -c "import pplib;print(pplib.__version__)").Trim()
