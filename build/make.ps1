@@ -1,10 +1,12 @@
 ﻿# -*- coding: utf-8 -*-
-# 一键打包桌面应用：装 PyInstaller → 生成 exe → 把运行时脚本复制到 dist
+# 一键打包桌面应用：装 PyInstaller → 生成 exe → 复制运行时脚本 → 可选打便携 zip
 #
 # 用法：  powershell -NoProfile -ExecutionPolicy Bypass -File build\make.ps1
 #         powershell ... -File build\make.ps1 -SkipInstall   # 已装过 PyInstaller
+#         powershell ... -File build\make.ps1 -SkipInstall -Zip   # 同时产出便携包
 param(
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [switch]$Zip
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +17,10 @@ $py = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $py)) {
     throw "找不到 .venv：先运行 setup.cmd 准备运行环境"
 }
+
+$version = (& $py -c "import pplib;print(pplib.__version__)").Trim()
+if (-not $version) { $version = "0.0.0" }
+Write-Host "[build] 版本：$version" -ForegroundColor Cyan
 
 if (-not $SkipInstall) {
     Write-Host "[build] 安装 PyInstaller ..." -ForegroundColor Cyan
@@ -55,6 +61,12 @@ foreach ($f in $plainFiles) {
     if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $dist -Force }
 }
 
+# 给接收方看的一页说明（解压即读）
+$portableTxt = Join-Path $Root "build\portable-readme.txt"
+if (Test-Path -LiteralPath $portableTxt) {
+    Copy-Item -LiteralPath $portableTxt -Destination (Join-Path $dist "首次使用.txt") -Force
+}
+
 $exe = Join-Path $dist "ProPainterToolbox.exe"
 if (-not (Test-Path -LiteralPath $exe)) { throw "exe 没有生成：$exe" }
 $size = [math]::Round(((Get-ChildItem -LiteralPath $dist -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
@@ -62,3 +74,13 @@ Write-Host ""
 Write-Host "[build] 完成：$dist" -ForegroundColor Green
 Write-Host "[build] 目录体积：$size MB（不含 .venv / weights，首次启动会引导在线安装）" -ForegroundColor Green
 Write-Host "[build] 双击 ProPainterToolbox.exe 即可运行" -ForegroundColor Green
+
+if ($Zip) {
+    $zipPath = Join-Path $Root ("dist\ProPainterToolbox-{0}-portable.zip" -f $version)
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    Write-Host "[build] 打便携包 ..." -ForegroundColor Cyan
+    Compress-Archive -Path $dist -DestinationPath $zipPath -CompressionLevel Optimal
+    $zipSize = [math]::Round((Get-Item -LiteralPath $zipPath).Length / 1MB, 1)
+    Write-Host "[build] 便携包：$zipPath（$zipSize MB）" -ForegroundColor Green
+    Write-Host "[build] 直接发给别人：解压后双击 exe，首次启动会引导安装运行时" -ForegroundColor Green
+}
