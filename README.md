@@ -9,8 +9,11 @@
 > 请勿用于去除他人作品的署名/权利管理信息，或用于搬运、二次分发他人内容——那属于侵权，责任自负。
 > 完整条款见 [TERMS.md](TERMS.md)。
 
-> **下载**：最新版见 <https://github.com/xg-jxk/propainter-toolbox/releases/latest>
-> （便携包 `ProPainterToolbox-<版本>-portable.zip`，约 49 MB；解压即用，首次启动会引导安装运行时）
+> **下载**：
+> - GitHub：<https://github.com/xg-jxk/propainter-toolbox/releases/latest>
+> - Gitee 镜像：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.0>
+>
+> 便携包 `ProPainterToolbox-<版本>-portable.zip`，约 49 MB；解压即用，首次启动会引导安装运行时。
 
 ---
 
@@ -110,8 +113,8 @@ ProPainterToolbox\
 1. 直接打开最新版页面：<https://github.com/xg-jxk/propainter-toolbox/releases/latest>
    （从仓库首页进的话：右侧栏的 **Releases** 区块 → 最新版本；它**不在**顶部 `Code / Issues` 那一排）
 2. 在 **Assets** 里下载 **`ProPainterToolbox-1.3.0-portable.zip`**（约 **49 MB**）
-3. Gitee 镜像：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases>
-   （国内下载 GitHub 慢就用它；若 Gitee 侧暂时没有附件，用 GitHub 的同一份 zip）
+3. Gitee 镜像（**同一份文件**）：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.0>
+   国内下载 GitHub 慢时用它，附件名与校验值都一致
 
 > 包很小是因为它只是“界面外壳”：PyTorch、模型权重、超分工具都在第一次运行时按需下载。
 > 若 Releases 里暂时没有附件，请走 2.2 源码方式，或联系作者。
