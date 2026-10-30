@@ -289,15 +289,20 @@ def run_repair(video, opts, emit, out=None, final=True):
                 box = info.get("box")
                 if box:
                     bx, by, bw, bh = box
-                    raise JobError(
-                        "自动定位失败：只在 %d/%d 帧看到疑似目标，不够稳定"
-                        % (info.get("hits", 0), info.get("samples", 0)),
-                        "把「定位方式」改成「手动矩形」，填入 %d,%d,%d,%d 即可；"
-                        "或用「逐帧掩码」" % (bx, by, bw, bh))
-                raise JobError(
-                    "自动检测失败：这个视频里没找到稳定的角标 / 文字",
-                    "请改用「手动矩形」框住要处理的区域，或选「逐帧掩码」；"
-                    "命令行可加 --dry-run 先看预览图")
+                    reason = ("只在 %d/%d 帧看到疑似目标（约 %d,%d,%d,%d），不够稳定"
+                              % (info.get("hits", 0), info.get("samples", 0), bx, by, bw, bh))
+                    tip = "把「定位方式」改成「手动矩形」，填 %d,%d,%d,%d 即可" % (bx, by, bw, bh)
+                else:
+                    reason = "画面里没找到稳定的角标 / 文字"
+                    tip = "改用「手动矩形」或「逐帧掩码」可以指定要处理的位置"
+                emit.log("⚠ 未检测到稳定目标，跳过区域修复：%s" % reason)
+                emit.log("   %s；若只想超分，取消勾选「区域修复」" % tip)
+                result = {"skipped": True, "reason": reason, "hint": tip,
+                          "out": None, "frames": n, "elapsed": time.time() - t0}
+                if final:
+                    emit.done(out=None, size=None, elapsed=result["elapsed"],
+                              extra={"frames": n, "skipped": "repair", "reason": reason})
+                return result
             for k, s in enumerate(segs):
                 bx, by, bw, bh = D.union_box(s["boxes"].values())
                 emit.log("片段%d：帧 %d-%d（%d 帧），目标框约 (%d,%d) %dx%d"

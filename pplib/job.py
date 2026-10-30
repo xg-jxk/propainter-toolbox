@@ -71,18 +71,35 @@ def _run_pipeline(spec, emit):
     try:
         emit.log("步骤 1/2  区域修复 ...")
         repair_opts = replace(spec.repair, crf=spec.intermediate_crf)
-        run_repair(spec.video, repair_opts, ScaledEmitter(emit, 0.0, 46.0), out=clean, final=False)
+        rep = run_repair(spec.video, repair_opts, ScaledEmitter(emit, 0.0, 46.0),
+                         out=clean, final=False)
+        skipped = bool((rep or {}).get("skipped"))
+        reason = (rep or {}).get("reason")
+        if skipped:
+            emit.log("⚠ 区域修复已跳过（%s），继续做超分" % reason)
         emit.check_cancel()
 
         emit.log("步骤 2/2  超分 ...")
-        out = spec.out or default_out(spec.video, "pipeline", spec.sr.scale)
-        res = run_sr(clean, spec.sr, ScaledEmitter(emit, 46.0, 98.0), out=out, final=False)
+        # 跳过修复时 super-res 直接吃原视频（clean.mp4 根本不存在）
+        src = spec.video if skipped else clean
+        if spec.out:
+            out = spec.out
+        elif skipped:
+            out = default_out(spec.video, "sr", spec.sr.scale)   # 没有修复，名字不带「_已修复」
+        else:
+            out = default_out(spec.video, "pipeline", spec.sr.scale)
+        res = run_sr(src, spec.sr, ScaledEmitter(emit, 46.0, 98.0), out=out, final=False)
         emit.total_pct(100)
         size = os.path.getsize(out) if os.path.isfile(out) else None
-        emit.done(out=out, size=size, elapsed=time.time() - t0,
-                  extra={"frames": res.get("frames"), "mode": "pipeline"})
-        return {"out": out, "size": size, "elapsed": time.time() - t0,
-                "frames": res.get("frames")}
+        extra = {"frames": res.get("frames"), "mode": "pipeline"}
+        if skipped:
+            extra.update({"skipped": "repair", "reason": reason})
+        emit.done(out=out, size=size, elapsed=time.time() - t0, extra=extra)
+        result = {"out": out, "size": size, "elapsed": time.time() - t0,
+                  "frames": res.get("frames")}
+        if skipped:
+            result.update({"skipped": "repair", "reason": reason})
+        return result
     finally:
         if keep:
             emit.log("中间文件：%s" % jobdir)

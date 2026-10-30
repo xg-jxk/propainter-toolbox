@@ -58,8 +58,13 @@ def main(argv=None):
         emit.cancelled_event()
         return 3
     except Exception as e:  # 兜底，避免 GUI 只看到进程退出码
-        emit.error("%s: %s" % (type(e).__name__, e),
-                   "把本次日志发出来，可定位具体原因")
+        import traceback
+        tb = traceback.format_exc()
+        emit.log("未预期异常，完整堆栈如下：")
+        for line in tb.rstrip().splitlines()[-25:]:
+            emit.log("  " + line)
+        hint = "把上面这段堆栈发出来即可定位；显存不足可把 subvideo / padding 调小"
+        emit.error("%s: %s" % (type(e).__name__, e), hint)
         return 1
     finally:
         if log_sink is not None:

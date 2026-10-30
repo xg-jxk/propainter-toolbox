@@ -253,6 +253,30 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(JobRunner._decode(QByteArray('中文'.encode("utf-8"))), "中文")
         # 非 UTF-8（GBK）时回退，不应抛异常
         self.assertEqual(JobRunner._decode(QByteArray("错误".encode("gbk"))), "错误")
+    def test_skipped_job_is_not_failure(self):
+        """检测不到目标：标记跳过、不弹失败、继续队列。"""
+        from app.core.queue import STATUS_SKIPPED
+        win = self._win()
+        win.open_when_done.setChecked(False)
+        win.queue.add_paths([self._tmp_video()])
+        win._rebuild_table()
+        win._current = 0
+        win._on_finished("done", {"skipped": "repair", "reason": "没找到稳定目标", "code": 0})
+        self.assertEqual(win.queue[0].status, STATUS_SKIPPED)
+        self.assertIn("没找到稳定目标", win.queue[0].message)
+        win.close()
+
+    def test_pipeline_skip_marks_done_with_note(self):
+        win = self._win()
+        win.open_when_done.setChecked(False)
+        win.queue.add_paths([self._tmp_video()])
+        win._rebuild_table()
+        win._current = 0
+        win._on_finished("done", {"skipped": "repair", "reason": "x",
+                                  "out": r"C:\tmp\a_2x.mp4", "size": 10, "elapsed": 1})
+        self.assertEqual(win.queue[0].status, "完成（跳修复）")
+        self.assertEqual(win.queue[0].out, r"C:\tmp\a_2x.mp4")
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

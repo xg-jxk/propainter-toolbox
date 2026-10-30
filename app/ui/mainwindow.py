@@ -19,7 +19,8 @@ from ..core import config as cfgmod
 from ..core import envcheck
 from ..core.bridge import JobRunner
 from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
-                          STATUS_PENDING, STATUS_RUNNING, JobQueue)
+                          STATUS_PENDING, STATUS_RUNNING, STATUS_SKIPPED,
+                          JobQueue)
 from .help import checkbox_with_info, info_icon
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
@@ -640,12 +641,25 @@ class MainWindow(QMainWindow):
         if self._current is None:
             return
         item = self.queue[self._current]
-        if state == "done":
-            item.status = STATUS_DONE
+        skipped = payload.get("skipped")
+        reason = payload.get("reason") or ""
+        if state == "done" and skipped and not payload.get("out"):
+            # 一条龙里只勾了修复、又没检测到目标：跳过，不算失败
+            item.status = STATUS_SKIPPED
+            item.message = "未检测到目标：%s" % (reason or "无")
+            item.pct = 100
+            item.elapsed = float(payload.get("elapsed") or 0)
+            self.append_log("⚠ 跳过：%s —— %s" % (item.name, item.message))
+            self.append_log("   只做超分请取消勾选「区域修复」；要指定位置用「手动矩形」/「逐帧掩码」")
+        elif state == "done":
+            item.status = "完成（跳修复）" if skipped else STATUS_DONE
             item.out = payload.get("out") or ""
             item.pct = 100
             item.elapsed = float(payload.get("elapsed") or 0)
             self._last_out = item.out
+            if skipped:
+                self.append_log("⚠ %s 未检测到稳定目标，已跳过区域修复，只做了超分" % item.name)
+                self.append_log("   %s" % reason)
             self.append_log("✔ 完成：%s（%s）"
                             % (item.out, self._size_text(payload.get("size"))))
         elif state == "cancelled":
@@ -655,10 +669,18 @@ class MainWindow(QMainWindow):
             self.append_log("✖ 已取消：%s" % item.name)
         else:
             item.status = STATUS_FAILED
-            item.message = payload.get("msg") or "失败"
-            self.append_log("✖ 失败：%s —— %s" % (item.name, item.message))
-            if payload.get("hint"):
-                self.append_log("   %s" % payload["hint"])
+            msg = payload.get("msg") or "任务失败（没有返回具体原因）"
+            hint = payload.get("hint") or ""
+            code = payload.get("code")
+            item.message = msg
+            self.append_log("✖ 失败：%s" % item.name)
+            self.append_log("   原因：%s" % msg)
+            if hint:
+                self.append_log("   建议：%s" % hint)
+            if code is not None:
+                self.append_log("   退出码：%s（完整日志见上方）" % code)
+            self.status_label.setText(msg[:60])
+            self.status_label.setStyleSheet("color:#c62828")
             if not self.log_box.is_expanded():
                 self.log_box.set_expanded(True)
         self._fill_row(self._current, item)
@@ -681,11 +703,13 @@ class MainWindow(QMainWindow):
 
     def _all_done(self):
         self.set_running(False)
-        done = sum(1 for it in self.queue if it.status == STATUS_DONE)
+        done = sum(1 for it in self.queue if it.status in (STATUS_DONE, "完成（跳修复）"))
+        skipped = sum(1 for it in self.queue if it.status == STATUS_SKIPPED)
         failed = sum(1 for it in self.queue if it.status in (STATUS_FAILED, STATUS_CANCELLED))
-        self.status_label.setText("完成 %d 个，失败/取消 %d 个" % (done, failed))
-        self.append_log("===== 队列结束：成功 %d，失败/取消 %d，总用时 %.0fs ====="
-                        % (done, failed, time.time() - self._t_start))
+        self.status_label.setText("完成 %d 个，跳过 %d 个，失败/取消 %d 个"
+                                  % (done, skipped, failed))
+        self.append_log("===== 队列结束：成功 %d，跳过 %d，失败/取消 %d，总用时 %.0fs ====="
+                        % (done, skipped, failed, time.time() - self._t_start))
         if self.open_when_done.isChecked() and done:
             self.open_output()
 

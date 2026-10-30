@@ -11,6 +11,7 @@ STATUS_RUNNING = "处理中"
 STATUS_DONE = "完成"
 STATUS_FAILED = "失败"
 STATUS_CANCELLED = "已取消"
+STATUS_SKIPPED = "跳过"
 
 
 @dataclass
