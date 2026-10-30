@@ -277,6 +277,28 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(win.queue[0].status, "完成（跳修复）")
         self.assertEqual(win.queue[0].out, r"C:\tmp\a_2x.mp4")
         win.close()
+    def test_test_mode_in_spec(self):
+        win = self._win()
+        win.output_panel.test_mode.setChecked(True)
+        win.output_panel.test_seconds.setValue(3)
+        win.output_panel.test_start.setValue(2.5)
+        spec = win._build_spec(r"C:\v\a.mp4")
+        self.assertEqual(spec["clip_seconds"], 3)
+        self.assertAlmostEqual(spec["clip_start"], 2.5, places=1)
+        win.output_panel.test_mode.setChecked(False)
+        self.assertEqual(win._build_spec(r"C:\v\a.mp4")["clip_seconds"], 0)
+        win.close()
+
+    def test_preview_status_in_queue(self):
+        win = self._win()
+        win.open_when_done.setChecked(False)
+        win.queue.add_paths([self._tmp_video()])
+        win._rebuild_table()
+        win._current = 0
+        win._on_finished("done", {"preview": True, "out": r"C:\v\a_预览.mp4",
+                                  "size": 100, "elapsed": 2})
+        self.assertEqual(win.queue[0].status, "完成（预览）")
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

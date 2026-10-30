@@ -125,6 +125,8 @@ class JobSpec:
     workdir: Optional[str] = None
     log_file: Optional[str] = None
     intermediate_crf: int = 12
+    clip_seconds: float = 0.0           # >0 表示测试模式：只处理这一段
+    clip_start: float = 0.0
     repair: RepairOptions = field(default_factory=RepairOptions)
     sr: SROptions = field(default_factory=SROptions)
 
@@ -136,26 +138,36 @@ class JobSpec:
             "workdir": self.workdir,
             "log_file": self.log_file,
             "intermediate_crf": self.intermediate_crf,
+            "clip_seconds": self.clip_seconds,
+            "clip_start": self.clip_start,
             "repair": asdict(self.repair),
             "sr": asdict(self.sr),
         }
 
 
-def default_out(video, mode="repair", scale=2):
-    """按模式给出默认输出路径；重名自动加 (2)(3)…"""
+def _unique(base, ext=".mp4"):
+    cand = base + ext
+    i = 2
+    while os.path.exists(cand):
+        cand = "%s(%d)%s" % (base, i, ext)
+        i += 1
+    return cand
+
+
+def default_out(video, mode="repair", scale=2, preview=False):
+    """按模式给出默认输出路径；重名自动加 (2)(3)…
+
+    preview=True 时只加 `_预览` 后缀（测试模式），不区分修复/超分。
+    """
     video = os.path.abspath(video)
     directory = os.path.dirname(video)
     name = os.path.splitext(os.path.basename(video))[0]
-    if mode == "repair":
+    if preview:
+        suffix = "_预览"
+    elif mode == "repair":
         suffix = "_已修复"
     elif mode == "sr":
         suffix = "_%dx" % int(scale)
     else:
         suffix = "_已修复_%dx" % int(scale)
-    base = os.path.join(directory, name + suffix)
-    cand = base + ".mp4"
-    i = 2
-    while os.path.exists(cand):
-        cand = "%s(%d).mp4" % (base, i)
-        i += 1
-    return cand
+    return _unique(os.path.join(directory, name + suffix))

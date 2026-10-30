@@ -3,13 +3,14 @@
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QSlider,
-                               QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from pplib.options import default_out
 
-from .help import attach, label_with_info
+from .help import attach, checkbox_with_info, label_with_info
 from .widgets import Collapsible, ModuleCard, SegmentedControl
 
 #: 三档预设：只动"画质/上下文"这类数值，不动功能开关
@@ -233,6 +234,34 @@ class OutputPanel(QFrame):
         self.preview.setObjectName("hintLabel")
         outer.addWidget(self.preview)
 
+        test_row = QHBoxLayout()
+        test_row.setSpacing(8)
+        self.test_mode = QCheckBox("测试模式")
+        test_row.addWidget(checkbox_with_info(self.test_mode, "test_mode"))
+        test_row.addSpacing(6)
+        test_row.addWidget(QLabel("只处理"))
+        self.test_seconds = QSpinBox()
+        self.test_seconds.setRange(1, 60)
+        self.test_seconds.setValue(3)
+        self.test_seconds.setSuffix(" 秒")
+        self.test_seconds.setFixedWidth(78)
+        test_row.addWidget(self.test_seconds)
+        test_row.addWidget(QLabel("从第"))
+        self.test_start = QDoubleSpinBox()
+        self.test_start.setRange(0.0, 3600.0)
+        self.test_start.setDecimals(1)
+        self.test_start.setSingleStep(0.5)
+        self.test_start.setSuffix(" 秒")
+        self.test_start.setFixedWidth(88)
+        test_row.addWidget(self.test_start)
+        test_row.addSpacing(4)
+        test_row.addWidget(QLabel("开始"))
+        test_row.addStretch(1)
+        outer.addLayout(test_row)
+
+        self.test_mode.toggled.connect(self._sync_test)
+        self._sync_test(False)
+
         qrow = QHBoxLayout()
         qrow.setSpacing(8)
         self.quality = SegmentedControl(QUALITY_OPTIONS, 17)
@@ -269,6 +298,16 @@ class OutputPanel(QFrame):
                 btn.setChecked(False)
             self.quality._current = value
 
+    def _sync_test(self, on):
+        self.test_seconds.setEnabled(bool(on))
+        self.test_start.setEnabled(bool(on))
+
+    def clip_seconds(self):
+        return int(self.test_seconds.value()) if self.test_mode.isChecked() else 0
+
+    def clip_start(self):
+        return float(self.test_start.value()) if self.test_mode.isChecked() else 0.0
+
     # ---------------------------------------------------------- 取值
     def out_dir_text(self):
         return self.out_dir.text().strip()
@@ -279,11 +318,11 @@ class OutputPanel(QFrame):
     def encoder_value(self):
         return self.encoder.currentData()
 
-    def out_path(self, video, mode, scale):
+    def out_path(self, video, mode, scale, preview=False):
         d = self.out_dir_text()
         if not d:
             return None
-        base = default_out(video, mode, scale)
+        base = default_out(video, mode, scale, preview=preview)
         try:
             os.makedirs(d, exist_ok=True)
         except OSError:

@@ -72,6 +72,23 @@ def find_ffmpeg():
     return _ffmpeg
 
 
+def cut_clip(src, dst, start, seconds, emit=None):
+    """切出 [start, start+seconds) 的一段；重编码保证时间轴精确、开头无负时间戳。"""
+    ff = find_ffmpeg()
+    cmd = [ff, "-hide_banner", "-loglevel", "error", "-y"]
+    if start and float(start) > 0.001:
+        cmd += ["-ss", "%.3f" % float(start)]
+    cmd += ["-i", str(src), "-t", "%.3f" % float(seconds),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "12",
+            "-c:a", "aac", "-b:a", "192k",
+            "-avoid_negative_ts", "make_zero", "-movflags", "+faststart",
+            str(dst)]
+    run(cmd, emit=emit, label="裁剪预览片段")
+    if not os.path.isfile(dst) or os.path.getsize(dst) == 0:
+        raise JobError("预览片段生成失败：%s" % dst, "检查磁盘空间与源文件是否可读")
+    return dst
+
+
 def probe(video):
     """返回 (fps, 是否有音轨, 时长秒)。fps 优先取精确的 tbr，取不到退回 30。"""
     ff = find_ffmpeg()

@@ -30,6 +30,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="pplib.runner")
     ap.add_argument("--spec", required=True, help="任务 JSON 文件路径")
     ap.add_argument("--jsonl", action="store_true", help="输出 JSON 事件流而不是人读日志")
+    ap.add_argument("--clip", type=float, default=None,
+                    help="测试模式：只处理这么多秒（覆盖 spec）")
+    ap.add_argument("--clip-start", type=float, default=None, help="测试模式起始秒数")
     args = ap.parse_args(argv)
 
     sink = jsonl_sink() if args.jsonl else None
@@ -44,6 +47,12 @@ def main(argv=None):
             emit = Emitter(tee_sink(sink or human_sink, log_sink))
 
         spec = parse_spec(data)
+        if args.clip is not None or args.clip_start is not None:
+            from dataclasses import replace as _replace
+            spec = _replace(
+                spec,
+                clip_seconds=float(args.clip if args.clip is not None else spec.clip_seconds),
+                clip_start=float(args.clip_start if args.clip_start is not None else spec.clip_start))
         result = run_job(spec, emit)
         if not args.jsonl:
             print("结果：%s" % (result or {}))

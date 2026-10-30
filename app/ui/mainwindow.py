@@ -304,6 +304,9 @@ class MainWindow(QMainWindow):
         self.sr_panel.scale.changed.connect(self._update_preview)
         self.output_panel.out_dir.textChanged.connect(self._update_preview)
         self.output_panel.crf.valueChanged.connect(self._update_preview)
+        self.output_panel.test_mode.toggled.connect(self._update_preview)
+        self.output_panel.test_seconds.valueChanged.connect(self._update_preview)
+        self.output_panel.test_start.valueChanged.connect(self._update_preview)
 
         self.runner.logLine.connect(self.append_log)
         self.runner.stageChanged.connect(self._on_stage)
@@ -337,6 +340,9 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.sr_panel.model.setCurrentIndex(idx)
         self.output_panel.out_dir.setText(c.get("out_dir", ""))
+        self.output_panel.test_mode.setChecked(bool(c.get("test_mode", False)))
+        self.output_panel.test_seconds.setValue(int(c.get("test_seconds", 3)))
+        self.output_panel.test_start.setValue(float(c.get("test_start", 0.0)))
         self.output_panel.crf.setValue(int(c.get("crf", 17)))
         idx = self.output_panel.encoder.findData(c.get("encoder", "auto"))
         if idx >= 0:
@@ -366,6 +372,9 @@ class MainWindow(QMainWindow):
             "denoise": str(self.sr_panel.denoise.currentData()),
             "model": self.sr_panel.model.currentData(),
             "out_dir": self.output_panel.out_dir_text(),
+            "test_mode": self.output_panel.test_mode.isChecked(),
+            "test_seconds": self.output_panel.test_seconds.value(),
+            "test_start": round(self.output_panel.test_start.value(), 1),
             "crf": self.output_panel.crf_value(),
             "encoder": self.output_panel.encoder_value(),
             "keep": self.keep.isChecked(),
@@ -411,9 +420,10 @@ class MainWindow(QMainWindow):
         video = self.queue[0].path if len(self.queue) else os.path.join("D:\\video", "a.mp4")
         mode = self._mode() or "repair"
         scale = int(self.sr_panel.scale.value() or 2)
-        path = self.output_panel.out_path(video, mode, scale)
+        preview = self.output_panel.test_mode.isChecked()
+        path = self.output_panel.out_path(video, mode, scale, preview=preview)
         if not path:
-            path = default_out(video, mode, scale)
+            path = default_out(video, mode, scale, preview=preview)
         where = os.path.dirname(path)
         name = os.path.basename(path)
         if self.output_panel.out_dir_text():
@@ -560,8 +570,11 @@ class MainWindow(QMainWindow):
         return {
             "mode": mode,
             "video": video,
-            "out": self.output_panel.out_path(video, mode, sr["scale"]),
+                        "out": self.output_panel.out_path(video, mode, sr["scale"],
+                                       preview=self.output_panel.test_mode.isChecked()),
             "intermediate_crf": 12,
+            "clip_seconds": self.output_panel.clip_seconds(),
+            "clip_start": self.output_panel.clip_start(),
             "repair": repair,
             "sr": sr,
         }
@@ -652,7 +665,11 @@ class MainWindow(QMainWindow):
             self.append_log("⚠ 跳过：%s —— %s" % (item.name, item.message))
             self.append_log("   只做超分请取消勾选「区域修复」；要指定位置用「手动矩形」/「逐帧掩码」")
         elif state == "done":
-            item.status = "完成（跳修复）" if skipped else STATUS_DONE
+            preview = bool(payload.get("preview"))
+            if preview:
+                item.status = "完成（预览）"
+            else:
+                item.status = "完成（跳修复）" if skipped else STATUS_DONE
             item.out = payload.get("out") or ""
             item.pct = 100
             item.elapsed = float(payload.get("elapsed") or 0)
@@ -660,8 +677,9 @@ class MainWindow(QMainWindow):
             if skipped:
                 self.append_log("⚠ %s 未检测到稳定目标，已跳过区域修复，只做了超分" % item.name)
                 self.append_log("   %s" % reason)
-            self.append_log("✔ 完成：%s（%s）"
-                            % (item.out, self._size_text(payload.get("size"))))
+            self.append_log("✔ %s完成：%s（%s）"
+                            % ("预览" if payload.get("preview") else "",
+                               item.out, self._size_text(payload.get("size"))))
         elif state == "cancelled":
             item.status = STATUS_CANCELLED
             item.message = "已取消"
@@ -703,7 +721,7 @@ class MainWindow(QMainWindow):
 
     def _all_done(self):
         self.set_running(False)
-        done = sum(1 for it in self.queue if it.status in (STATUS_DONE, "完成（跳修复）"))
+        done = sum(1 for it in self.queue if it.status in (STATUS_DONE, "完成（跳修复）", "完成（预览）"))
         skipped = sum(1 for it in self.queue if it.status == STATUS_SKIPPED)
         failed = sum(1 for it in self.queue if it.status in (STATUS_FAILED, STATUS_CANCELLED))
         self.status_label.setText("完成 %d 个，跳过 %d 个，失败/取消 %d 个"
