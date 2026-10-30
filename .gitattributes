@@ -12,3 +12,8 @@
 *.jpeg binary
 *.pth binary
 *.zip binary
+*.ico binary
+*.spec text eol=lf
+*.qss text eol=lf
+*.iss text eol=crlf
+

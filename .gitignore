@@ -26,7 +26,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+build/*
 develop-eggs/
 dist/
 downloads/
@@ -143,3 +143,15 @@ inputs/
 *.part
 tools/python/
 setup.log
+
+# ---- desktop app / packaging ----
+dist/
+build/PyInstaller/
+*.pyc
+
+# 打包脚本要入库（产物仍然忽略）
+!build/launcher.py
+!build/app.spec
+!build/make.ps1
+!build/installer.iss
+!build/make_icon.py

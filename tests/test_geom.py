@@ -8,9 +8,9 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wm_remove import crop_geom, union_box, _cluster  # noqa: E402
+from pplib.detect import _cluster, crop_geom, union_box  # noqa: E402
 
 
 class CropGeomTest(unittest.TestCase):

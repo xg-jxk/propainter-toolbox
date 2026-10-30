@@ -1,105 +1,62 @@
 # -*- coding: utf-8 -*-
-"""去水印 + 超分 一条龙
+"""去水印 + 超分 一条龙命令行（逻辑在 pplib.job）。
 
-  python pipeline.py --video "D:\\v\\a.mp4"                 # 去水印 -> 2x
-  python pipeline.py --video "D:\\v\\a.mp4" --scale 3
-  python pipeline.py --video "D:\\v\\a.mp4" --rect 1314,918,320,120
-可选: --denoise -1|0|1|2|3  --out  --keep  --workdir  --log-file
-      --encoder auto|nvenc|x264  --intermediate-crf 12
+  python tools\\pipeline.py --video "D:\\v\\a.mp4"                # 去水印 -> 2x
+  python tools\\pipeline.py --video "D:\\v\\a.mp4" --scale 3 --rect 1314,918,320,120
 """
 import argparse
 import os
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
 
-from common import (ROOT as _ROOT, ensure_out_writable, log, set_log_file)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-REPO = str(_ROOT)
-PY = sys.executable
-_THIS = os.path.dirname(os.path.abspath(__file__))
-WM = os.path.join(_THIS, "wm_remove.py")
-SR = os.path.join(_THIS, "sr_upscale.py")
+from pplib.events import Cancelled, JobError, cli_emitter  # noqa: E402
+from pplib.job import run_job  # noqa: E402
+from pplib.options import JobSpec, SROptions, WMOptions  # noqa: E402
 
 
-def call(cmd):
-    """直接继承 stdout/stderr，能看到两个脚本的实时进度。"""
-    rc = subprocess.call(cmd)
-    if rc != 0:
-        raise SystemExit("步骤失败（退出码 %d）: %s"
-                         % (rc, os.path.basename(cmd[1]) if len(cmd) > 1 else cmd[0]))
-
-
-def main():
-    ap = argparse.ArgumentParser()
+def build_parser():
+    ap = argparse.ArgumentParser(description="去水印 + 超分 一条龙")
     ap.add_argument("--video", required=True)
     ap.add_argument("--scale", type=int, default=2, choices=[2, 3, 4])
-    ap.add_argument("--rect", help="不给就自动检测水印")
+    ap.add_argument("--rect", help="水印矩形 x,y,w,h；不给就自动检测")
+    ap.add_argument("--mask", help="掩码文件或掩码目录")
     ap.add_argument("--denoise", type=int, default=None, choices=[-1, 0, 1, 2, 3])
     ap.add_argument("--out")
-    ap.add_argument("--padding", type=float, default=None, help="透传给 wm_remove 的 --padding")
+    ap.add_argument("--padding", type=float, default=0.45)
     ap.add_argument("--crf", type=int, default=17)
     ap.add_argument("--intermediate-crf", type=int, default=12, dest="intermediate_crf",
-                    help="去水印中间文件码率（默认 12，肉眼无损；0 是无损但文件巨大）")
+                    help="去水印中间文件码率（默认 12；0 为无损但文件巨大）")
     ap.add_argument("--encoder", default="auto", choices=["auto", "x264", "nvenc"])
-    ap.add_argument("--workdir")
-    ap.add_argument("--log-file", dest="log_file")
     ap.add_argument("--keep", action="store_true")
-    a = ap.parse_args()
+    ap.add_argument("--log-file", dest="log_file")
+    return ap
 
-    if a.log_file:
-        set_log_file(a.log_file)
 
-    video = os.path.abspath(a.video)
-    if not os.path.isfile(video):
-        raise SystemExit("找不到视频: %s" % video)
-    for p in (PY, WM, SR):
-        if not os.path.isfile(p):
-            raise SystemExit("缺少: %s" % p)
-
-    name = os.path.splitext(os.path.basename(video))[0]
-    out_dir = os.path.dirname(video)
-    final = a.out or os.path.join(out_dir, "%s_无水印_%dx.mp4" % (name, a.scale))
-    ensure_out_writable(final)
-
-    if a.workdir:
-        os.makedirs(a.workdir, exist_ok=True)
-    job = tempfile.mkdtemp(prefix="ppline_", dir=a.workdir or None)
-    clean = os.path.join(job, "clean.mp4")
-    t0 = time.time()
-
+def main(argv=None):
+    a = build_parser().parse_args(argv)
+    spec = JobSpec(
+        mode="pipeline",
+        video=a.video,
+        out=a.out,
+        log_file=a.log_file,
+        intermediate_crf=a.intermediate_crf,
+        wm=WMOptions(auto=True, rect=a.rect, mask=a.mask, padding=a.padding,
+                     crf=a.crf, encoder=a.encoder, keep=a.keep),
+        sr=SROptions(scale=a.scale, denoise=a.denoise, crf=a.crf,
+                     encoder=a.encoder, keep=a.keep),
+    )
+    emit = cli_emitter(a.log_file)
     try:
-        log("步骤 1/2  去水印 ...")
-        cmd = [PY, WM, "--video", video, "--out", clean, "--crf", str(a.intermediate_crf)]
-        cmd += (["--rect", a.rect] if a.rect else ["--auto"])
-        if a.padding is not None:
-            cmd += ["--padding", str(a.padding)]
-        if a.encoder != "auto":
-            cmd += ["--encoder", a.encoder]
-        if a.log_file:
-            cmd += ["--log-file", a.log_file]
-        call(cmd)
-
-        log("步骤 2/2  超分 ...")
-        cmd = [PY, SR, "--video", clean, "--scale", str(a.scale), "--out", final,
-               "--crf", str(a.crf)]
-        if a.denoise is not None:
-            cmd += ["--denoise", str(a.denoise)]
-        if a.encoder != "auto":
-            cmd += ["--encoder", a.encoder]
-        if a.log_file:
-            cmd += ["--log-file", a.log_file]
-        call(cmd)
-    finally:
-        if a.keep:
-            log("中间文件: %s" % job)
-        else:
-            shutil.rmtree(job, ignore_errors=True)
-
-    log("完成: %s  (总用时 %.0fs)" % (final, time.time() - t0))
+        run_job(spec, emit)
+        return 0
+    except Cancelled:
+        emit.cancelled_event()
+        return 3
+    except JobError as e:
+        emit.error(str(e), e.hint)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

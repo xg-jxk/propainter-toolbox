@@ -1,3 +1,7 @@
 # 开发/测试用依赖（普通用户不需要）
 -r requirements.txt
 pytest>=8
+
+# 桌面应用（GUI）与打包
+PySide6>=6.5
+pyinstaller>=6.0

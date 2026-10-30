@@ -81,6 +81,43 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 
 一条龙额外支持：`--rect`、`--denoise`、`--intermediate-crf`（默认 12；旧版是无损 0，1080p 一分钟能到 2 GB）。
 
+## 桌面应用（PySide6，可选）
+
+不想开黑窗的话，可以跑带界面的版本——它和命令行**共用同一套流程**（`pplib/`），不是另写一份。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install PySide6    # 源码运行才需要（打包版已内置）
+.\.venv\Scripts\pythonw.exe -m app          # 直接运行（无控制台窗口）
+```
+
+界面里能做的事：
+
+- **拖拽**视频进来，队列最多 **20 个**，串行处理（GPU 并行只会 OOM）
+- 实时**逐帧进度 + 剩余时间**，随时**取消**（杀进程树，立即生效，不留临时目录）
+- 三种模式（去水印 / 超分 / 去水印+超分）、自动或手动矩形/掩码、编码器、画质、倍率都能在界面里调
+- 参数与窗口大小持久化在 `%LOCALAPPDATA%\ProPainterToolbox\config.json`
+- 首次启动若缺运行时，会显示「安装运行时」按钮，内部调用 `setup.ps1` 并把日志实时打到界面里
+- 完成后可自动打开输出目录
+
+### 打包成 exe
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File build\make.ps1
+# 产物：dist\ProPainterToolbox\ProPainterToolbox.exe
+```
+
+要点：**只打包 GUI 外壳**（PySide6），不打包 torch/cv2；`dist\ProPainterToolbox\` 里同时放了一份 `tools/ pplib/ model/ core/ utils/ RAFT/`，exe 就地找 `.venv`、`weights/`。
+首次启动会引导在线安装运行时（约 2.5 GB），所以安装包只有 ~60 MB。
+
+再打安装包（需要 [Inno Setup](https://jrsoftware.org/isinfo.php)）：
+
+```powershell
+ISCC.exe build\installer.iss
+# 产物：build\out\ProPainterToolbox-Setup-1.3.0.exe
+```
+
+安装到 `%LOCALAPPDATA%\Programs\ProPainterToolbox`（免 UAC，且能写 `.venv`）。
+
 ## 常见问题
 
 **Q：水印没擦干净？**
@@ -112,11 +149,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 ## 目录
 
 ```
-├─ tools/                 # 本项目的脚本
-│  ├─ common.py           # 路径 / 日志 / ffmpeg / 子进程 / 编码参数
+├─ pplib/                 # 核心流程（CLI / GUI / JSONL 任务进程共用）
+│  ├─ events.py           # 进度·日志·取消的事件模型
+│  ├─ ffmpeg.py           # probe / 抽帧 / 编码 / 子进程
+│  ├─ detect.py           # 水印检测与裁剪几何
+│  ├─ wm.py / sr.py       # 去水印 / 超分主流程
+│  ├─ job.py              # 任务校验与一条龙编排
+│  └─ runner.py           # python -m pplib.runner（GUI 用它跑任务）
+├─ app/                   # PySide6 桌面应用（薄壳）
+│  ├─ main.py             # pythonw -m app
+│  ├─ core/               # 配置 / 队列 / 进程桥 / 环境自检
+│  └─ ui/                 # 主窗口 / 安装向导 / 样式
+├─ tools/                 # 命令行入口（薄封装，行为与旧版一致）
+│  ├─ common.py           # 兼容层，转发到 pplib.ffmpeg
 │  ├─ wm_remove.py        # 去水印
 │  ├─ sr_upscale.py       # 超分
 │  └─ pipeline.py         # 一条龙
+├─ build/                 # 打包：launcher.py / app.spec / make.ps1 / installer.iss
 ├─ tests/                 # 纯 CPU 单测（python -m unittest discover -s tests）
 ├─ setup.cmd / setup.ps1  # 一键安装
 ├─ env.cmd                # 三个入口共用的环境变量
@@ -134,7 +183,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 
 ## 许可
 
-- 本仓库的胶水脚本（`tools/`、`tests/`、`*.cmd`、`setup.*`）：MIT
+- 本仓库的胶水脚本（`pplib/`、`app/`、`tools/`、`tests/`、`*.cmd`、`setup.*`）：MIT
 - ProPainter 及其权重：**S-Lab License 1.0，仅限非商业用途**，商用请联系原作者
 - Real-CUGAN / realcugan-ncnn-vulkan：MIT
 - Real-ESRGAN：BSD-3-Clause

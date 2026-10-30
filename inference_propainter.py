@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import json
 import cv2
 import argparse
 import imageio
@@ -26,6 +27,9 @@ warnings.filterwarnings("ignore", category=FutureWarning, module=r".*torch.*")
 # 每轮都调 torch.cuda.empty_cache() 会拆掉显存复用池，通常反而更慢。
 # 只有显存确实吃紧时才需要，用 PP_EMPTY_CACHE=1 打开旧行为。
 EMPTY_CACHE = os.environ.get("PP_EMPTY_CACHE", "0") == "1"
+
+# GUI 用：把进度以 "@@PP@@{json}" 的形式打到 stdout，父进程解析成进度条
+PROGRESS_PREFIX = "@@PP@@"
 
 
 def maybe_empty_cache():
@@ -242,6 +246,9 @@ if __name__ == '__main__':
         help='Save masked_in.mp4 / inpaint_out.mp4 preview videos. Default: off (纯浪费一次编码)')
     parser.add_argument(
         '--fp16', action='store_true', help='Use fp16 (half precision) during inference. Default: fp32 (single precision).')
+    parser.add_argument(
+        '--progress', action='store_true',
+        help='Emit @@PP@@ JSON progress lines on stdout (used by the GUI).')
 
     args = parser.parse_args()
 
@@ -249,6 +256,11 @@ if __name__ == '__main__':
         raise SystemExit(f'找不到输入: {args.video}')
     if not args.mask or not os.path.exists(args.mask):
         raise SystemExit(f'找不到掩码: {args.mask}')
+
+    def prog(**kw):
+        """给 GUI 的结构化进度；--progress 未开时是无副作用的空操作。"""
+        if args.progress:
+            print(PROGRESS_PREFIX + json.dumps(kw), flush=True)
 
     # Use fp16 precision during inference to reduce running memory cost
     use_half = True if args.fp16 else False
@@ -335,6 +347,7 @@ if __name__ == '__main__':
     ##############################################
     video_length = frames.size(1)
     print(f'\nProcessing: {video_name} [{video_length} frames]...')
+    prog(stage="计算光流", cur=0, total=video_length)
     with torch.no_grad():
         # ---- compute flow ----
         if frames.size(-1) <= 640:
@@ -376,6 +389,7 @@ if __name__ == '__main__':
 
 
         # ---- complete flow ----
+        prog(stage="补全光流")
         flow_length = gt_flows_bi[0].size(1)
         if flow_length > args.subvideo_length:
             pred_flows_f, pred_flows_b = [], []
@@ -491,12 +505,14 @@ if __name__ == '__main__':
                 comp_frames[idx] = comp_frames[idx].astype(np.uint8)
 
         maybe_empty_cache()
+        prog(cur=min(f + neighbor_stride, video_length), total=video_length)
 
     missing = [i for i, f in enumerate(comp_frames) if f is None]
     if missing:
         raise SystemExit('内部错误：%d 帧没有生成结果（前几帧：%s）' % (len(missing), missing[:5]))
 
     # save each frame
+    prog(stage="保存结果")
     if args.save_frames:
         for idx in range(video_length):
             f = comp_frames[idx]
