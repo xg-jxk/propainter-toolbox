@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """任务参数对象（GUI / JSONL 任务 / CLI 共用）。"""
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 
@@ -11,7 +11,9 @@ def _get(d, key, default):
 
 
 @dataclass
-class WMOptions:
+class RepairOptions:
+    """区域修复（去除画面中指定区域：字幕、台标、杂物、角标…）。"""
+
     auto: bool = True
     rect: Optional[str] = None          # "x,y,w,h"
     mask: Optional[str] = None          # 掩码文件或目录
@@ -77,8 +79,6 @@ class WMOptions:
                 raise JobError("rect 里的四个值必须是整数")
             if w <= 0 or h <= 0:
                 raise JobError("rect 的宽高必须大于 0")
-        if self.mask and not self.rect:
-            pass  # 掩码模式不需要 rect
 
 
 @dataclass
@@ -119,13 +119,13 @@ class SROptions:
 
 @dataclass
 class JobSpec:
-    mode: str = "wm"                    # wm | sr | pipeline
+    mode: str = "repair"                # repair | sr | pipeline
     video: str = ""
     out: Optional[str] = None
     workdir: Optional[str] = None
     log_file: Optional[str] = None
     intermediate_crf: int = 12
-    wm: WMOptions = field(default_factory=WMOptions)
+    repair: RepairOptions = field(default_factory=RepairOptions)
     sr: SROptions = field(default_factory=SROptions)
 
     def to_dict(self):
@@ -136,22 +136,22 @@ class JobSpec:
             "workdir": self.workdir,
             "log_file": self.log_file,
             "intermediate_crf": self.intermediate_crf,
-            "wm": asdict(self.wm),
+            "repair": asdict(self.repair),
             "sr": asdict(self.sr),
         }
 
 
-def default_out(video, mode="wm", scale=2):
+def default_out(video, mode="repair", scale=2):
     """按模式给出默认输出路径；重名自动加 (2)(3)…"""
     video = os.path.abspath(video)
     directory = os.path.dirname(video)
     name = os.path.splitext(os.path.basename(video))[0]
-    if mode == "wm":
-        suffix = "_无水印"
+    if mode == "repair":
+        suffix = "_已修复"
     elif mode == "sr":
         suffix = "_%dx" % int(scale)
     else:
-        suffix = "_无水印_%dx" % int(scale)
+        suffix = "_已修复_%dx" % int(scale)
     base = os.path.join(directory, name + suffix)
     cand = base + ".mp4"
     i = 2

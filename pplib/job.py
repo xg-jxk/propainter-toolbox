@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""任务编排：校验 spec、串联去水印+超分、批量输入归一化。"""
+"""任务编排：校验 spec、串联区域修复 + 超分。"""
 import os
 import shutil
 import tempfile
@@ -8,18 +8,18 @@ from dataclasses import replace
 
 from .const import MAX_QUEUE, VIDEO_EXTS, normalize_inputs  # noqa: F401  (对外兼容)
 from .events import JobError, ScaledEmitter
-from .options import JobSpec, SROptions, WMOptions, default_out
+from .options import JobSpec, RepairOptions, SROptions, default_out
+from .repair import run_repair
 from .sr import run_sr
-from .wm import run_wm
 
 
 def parse_spec(d):
     """把 JSON 字典校验成 JobSpec；失败抛 JobError（消息直接给用户看）。"""
     if not isinstance(d, dict):
         raise JobError("任务描述必须是 JSON 对象")
-    mode = str(d.get("mode") or "wm").strip().lower()
-    if mode not in ("wm", "sr", "pipeline"):
-        raise JobError("mode 只能是 wm / sr / pipeline")
+    mode = str(d.get("mode") or "repair").strip().lower()
+    if mode not in ("repair", "sr", "pipeline"):
+        raise JobError("mode 只能是 repair / sr / pipeline")
 
     video = str(d.get("video") or "").strip()
     if not video:
@@ -44,20 +44,20 @@ def parse_spec(d):
         workdir=_opt_str("workdir"),
         log_file=_opt_str("log_file"),
         intermediate_crf=icrf,
-        wm=WMOptions.from_dict(d.get("wm")),
+        repair=RepairOptions.from_dict(d.get("repair")),
         sr=SROptions.from_dict(d.get("sr")),
     )
     if not (0 <= spec.intermediate_crf <= 51):
         raise JobError("intermediate_crf 必须在 0~51 之间（12 常用，0 为无损但文件巨大）")
-    spec.wm.validate()
+    spec.repair.validate()
     spec.sr.validate()
     return spec
 
 
 def run_job(spec, emit):
     """执行一个任务；返回结果字典。"""
-    if spec.mode == "wm":
-        return run_wm(spec.video, spec.wm, emit, out=spec.out)
+    if spec.mode == "repair":
+        return run_repair(spec.video, spec.repair, emit, out=spec.out)
     if spec.mode == "sr":
         return run_sr(spec.video, spec.sr, emit, out=spec.out)
     return _run_pipeline(spec, emit)
@@ -67,11 +67,11 @@ def _run_pipeline(spec, emit):
     t0 = time.time()
     jobdir = tempfile.mkdtemp(prefix="ppline_")
     clean = os.path.join(jobdir, "clean.mp4")
-    keep = bool(spec.wm.keep or spec.sr.keep)
+    keep = bool(spec.repair.keep or spec.sr.keep)
     try:
-        emit.log("步骤 1/2  去水印 ...")
-        wm_opts = replace(spec.wm, crf=spec.intermediate_crf)
-        run_wm(spec.video, wm_opts, ScaledEmitter(emit, 0.0, 46.0), out=clean, final=False)
+        emit.log("步骤 1/2  区域修复 ...")
+        repair_opts = replace(spec.repair, crf=spec.intermediate_crf)
+        run_repair(spec.video, repair_opts, ScaledEmitter(emit, 0.0, 46.0), out=clean, final=False)
         emit.check_cancel()
 
         emit.log("步骤 2/2  超分 ...")

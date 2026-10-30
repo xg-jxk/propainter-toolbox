@@ -14,7 +14,7 @@ set "SC=%~2"
 if "%SC%"=="" set "SC=2"
 
 echo.
-echo  step 1: remove watermark    step 2: upscale %SC%x
+echo  step 1: 区域修复    step 2: 超分 %SC%x
 echo.
 "%PY%" "%~dp0tools\pipeline.py" --video "%~1" --scale %SC% %3 %4 %5 %6 %7 %8 %9
 set "RC=%ERRORLEVEL%"
@@ -26,12 +26,14 @@ exit /b %RC%
 :usage
 echo.
 echo  Usage:
-echo     wm-and-upscale.cmd "D:\video\a.mp4"                     remove watermark + 2x
-echo     wm-and-upscale.cmd "D:\video\a.mp4" 3                   3x
-echo     wm-and-upscale.cmd "D:\video\a.mp4" 2 --rect 1314,918,320,120
+echo     修复超分.cmd "D:\video\a.mp4"                        区域修复 + 2x
+echo     修复超分.cmd "D:\video\a.mp4" 3                       3x
+echo     修复超分.cmd "D:\video\a.mp4" 2 --rect 1314,918,320,120
 echo.
-echo  其它可透传的参数: --rect  --denoise  --padding  --crf  --intermediate-crf
-echo                    --encoder  --workdir  --log-file  --keep
+echo  其它可透传的参数: --rect --denoise --padding --crf --intermediate-crf
+echo                    --encoder --workdir --log-file --keep
+echo.
+echo  仅限处理你拥有版权或已获授权的视频，详见 TERMS.md
 echo.
 pause
 exit /b 1

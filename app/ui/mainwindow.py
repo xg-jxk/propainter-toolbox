@@ -21,8 +21,9 @@ from ..core.bridge import JobRunner
 from ..core.queue import (STATUS_CANCELLED, STATUS_DONE, STATUS_FAILED,
                           STATUS_PENDING, STATUS_RUNNING, JobQueue)
 from .install_dialog import InstallDialog
+from .terms_dialog import TermsDialog
 
-MODE_LABELS = [("去水印", "wm"), ("超分", "sr"), ("去水印 + 超分", "pipeline")]
+MODE_LABELS = [("区域修复", "repair"), ("超分", "sr"), ("区域修复 + 超分", "pipeline")]
 ENCODER_LABELS = [("自动（有 NVENC 就用）", "auto"),
                   ("NVIDIA NVENC", "nvenc"), ("CPU x264", "x264")]
 DETECT_LABELS = [("自动检测", "auto"), ("手动矩形", "rect"), ("逐帧掩码", "mask")]
@@ -119,6 +120,8 @@ class MainWindow(QMainWindow):
         self.btn_install = QPushButton("安装运行时")
         self.btn_install.setObjectName("primary")
         head.addWidget(self.btn_install)
+        self.btn_terms = QPushButton("使用条款")
+        head.addWidget(self.btn_terms)
         self.btn_env = QPushButton("环境信息")
         head.addWidget(self.btn_env)
         root.addLayout(head)
@@ -169,7 +172,7 @@ class MainWindow(QMainWindow):
         self.detect = QComboBox()
         for label, key in DETECT_LABELS:
             self.detect.addItem(label, key)
-        grid.addWidget(QLabel("水印检测"), 0, 2)
+        grid.addWidget(QLabel("区域定位"), 0, 2)
         grid.addWidget(self.detect, 0, 3)
 
         self.rect = QLineEdit()
@@ -273,6 +276,7 @@ class MainWindow(QMainWindow):
         self.btn_mask.clicked.connect(self.pick_mask)
         self.btn_outdir.clicked.connect(self.pick_outdir)
         self.btn_install.clicked.connect(self.open_install)
+        self.btn_terms.clicked.connect(self.show_terms)
         self.btn_env.clicked.connect(self.show_env)
         self.start_btn.clicked.connect(self.start_queue)
         self.cancel_btn.clicked.connect(self.cancel_current)
@@ -288,7 +292,7 @@ class MainWindow(QMainWindow):
     # ================================================================ 配置
     def _apply_config(self):
         c = self.cfg
-        self._set_combo(self.mode, c.get("mode", "wm"))
+        self._set_combo(self.mode, c.get("mode", "repair"))
         self._set_combo(self.detect, c.get("detect", "auto"))
         self.rect.setText(c.get("rect", ""))
         self.mask.setText(c.get("mask", ""))
@@ -333,7 +337,7 @@ class MainWindow(QMainWindow):
     def _sync_mode(self):
         mode = self.mode.currentData()
         detect = self.detect.currentData()
-        is_wm = mode in ("wm", "pipeline")
+        is_wm = mode in ("repair", "pipeline")
         is_sr = mode in ("sr", "pipeline")
         for w in (self.detect,):
             w.setEnabled(is_wm)
@@ -372,6 +376,9 @@ class MainWindow(QMainWindow):
     def _on_install_ok(self):
         self._refresh_runtime()
         self.append_log("运行时安装完成，已重新检测环境")
+
+    def show_terms(self):
+        TermsDialog(self, require_accept=False).exec()
 
     def show_env(self):
         st = self.runtime
@@ -491,7 +498,7 @@ class MainWindow(QMainWindow):
             os.makedirs(out_dir, exist_ok=True)
             out = os.path.join(out_dir, os.path.basename(base))
         return {"mode": mode, "video": video, "out": out,
-                "intermediate_crf": 12, "wm": wm, "sr": sr}
+                "intermediate_crf": 12, "repair": wm, "sr": sr}
 
     def start_queue(self):
         if self.runner.is_running():

@@ -36,6 +36,7 @@ def main(argv=None):
     opts = SROptions(scale=a.scale, denoise=a.denoise, model=a.model,
                      crf=a.crf, encoder=a.encoder, preset=a.preset, keep=a.keep)
     emit = cli_emitter(a.log_file)
+    emit.log("提示：仅限处理你拥有版权或已获授权的视频（见 TERMS.md）")
     try:
         run_sr(a.video, opts, emit, out=a.out)
         return 0

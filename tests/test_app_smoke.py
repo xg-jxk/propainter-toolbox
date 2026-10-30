@@ -54,11 +54,25 @@ class AppSmokeTest(unittest.TestCase):
         from app.ui.mainwindow import MainWindow
         win = MainWindow()
         spec = win._build_spec(r"D:\v\a.mp4")
-        self.assertEqual(spec["mode"], "wm")
-        self.assertTrue(spec["wm"]["auto"])
+        self.assertEqual(spec["mode"], "repair")
+        self.assertTrue(spec["repair"]["auto"])
         self.assertEqual(spec["sr"]["scale"], 2)
         win.close()
 
+    def test_terms_dialog_gate(self):
+        from app.ui.terms_dialog import TermsDialog
+        dlg = TermsDialog(require_accept=True)
+        self.assertFalse(dlg.btn_ok.isEnabled())      # 未勾选不能继续
+        dlg.check.setChecked(True)
+        self.assertTrue(dlg.btn_ok.isEnabled())
+        dlg.close()
+
+    def test_terms_dialog_view_mode(self):
+        from app.ui.terms_dialog import TermsDialog
+        dlg = TermsDialog(require_accept=False)
+        self.assertTrue(dlg.btn_ok.isEnabled())
+        self.assertFalse(dlg.check.isVisible())
+        dlg.close()
 
 if __name__ == "__main__":
     unittest.main()

@@ -266,7 +266,7 @@ if __name__ == '__main__':
     use_half = True if args.fp16 else False
     if device == torch.device('cpu'):
         use_half = False
-        print('[提示] 没有可用 GPU，正在用 CPU 推理（去水印会非常慢）')
+        print('[提示] 没有可用 GPU，正在用 CPU 推理（区域修复会非常慢）')
 
     frames, fps, size, video_name = read_frame_from_videos(args.video)
     if not args.width == -1 and not args.height == -1:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""去水印主流程：抽帧 → 检测 → 分段裁剪 → ProPainter 补全 → 羽化贴回 → 编码。
+"""区域修复主流程：抽帧 → 检测 → 分段裁剪 → ProPainter 补全 → 羽化贴回 → 编码。
 
-对外只有 run_wm()，CLI / GUI / JSONL 任务进程都调它。
+对外只有 run_repair()，CLI / GUI / JSONL 任务进程都调它。
 """
 import json
 import os
@@ -94,7 +94,7 @@ def _dry_run(video, opts, emit, job, name, fps, dur):
         segs = D.auto_detect(paths, W, H, job, thr=opts.detect_thr,
                              cfg=_detect_cfg(opts), emit=emit)
         if not segs:
-            emit.log("  没检测到稳定的水印，请改用 --rect x,y,w,h（坐标可用截图工具量）")
+            emit.log("  没检测到稳定的目标区域，请改用 --rect x,y,w,h（坐标可用截图工具量）")
         for s in segs:
             found.append((D.union_box(s["boxes"].values()), len(s["frames"])))
 
@@ -215,8 +215,8 @@ def _run_inference(seg, seg_dir, opts, emit, base_frames, total_frames):
     return res_dir
 
 
-def run_wm(video, opts, emit, out=None, final=True):
-    """执行一次去水印，返回结果字典。"""
+def run_repair(video, opts, emit, out=None, final=True):
+    """执行一次区域修复，返回结果字典。"""
     video = os.path.abspath(video)
     if not os.path.isfile(video):
         raise JobError("找不到视频：%s" % video)
@@ -226,7 +226,7 @@ def run_wm(video, opts, emit, out=None, final=True):
 
     name = os.path.splitext(os.path.basename(video))[0]
     from .options import default_out
-    out = out or default_out(video, "wm")
+    out = out or default_out(video, "repair")
     ensure_out_writable(out)
     os.makedirs(str(ROOT), exist_ok=True)
 
@@ -281,15 +281,15 @@ def run_wm(video, opts, emit, out=None, final=True):
                      "boxes": {i: box for i in range(n)}, "mask_dir": mdir}]
             emit.log("掩码范围 (%d,%d) %dx%d" % box)
         else:
-            emit.stage("自动检测水印", PCT_DETECT[0])
+            emit.stage("自动定位区域", PCT_DETECT[0])
             segs = D.auto_detect(frames, W, H, job, thr=opts.detect_thr,
                                  cfg=_detect_cfg(opts), emit=emit)
             if not segs:
-                raise JobError("自动检测失败", "用「手动矩形」指定水印位置，"
+                raise JobError("自动检测失败", "用「手动矩形」指定目标位置，"
                                               "或先用 --dry-run 看预览图")
             for k, s in enumerate(segs):
                 bx, by, bw, bh = D.union_box(s["boxes"].values())
-                emit.log("片段%d：帧 %d-%d（%d 帧），水印框约 (%d,%d) %dx%d"
+                emit.log("片段%d：帧 %d-%d（%d 帧），目标框约 (%d,%d) %dx%d"
                          % (k, s["f0"], s["f1"], len(s["frames"]), bx, by, bw, bh))
         emit.total_pct(PCT_DETECT[1])
 

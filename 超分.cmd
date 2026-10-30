@@ -23,9 +23,9 @@ exit /b %RC%
 :usage
 echo.
 echo  Usage:
-echo     sr-upscale.cmd "D:\video\a.mp4"            2x
-echo     sr-upscale.cmd "D:\video\a.mp4" 3          3x
-echo     sr-upscale.cmd "D:\video\a.mp4" 2 --denoise 0 --encoder nvenc
+echo     超分.cmd "D:\video\a.mp4"            2x
+echo     超分.cmd "D:\video\a.mp4" 3          3x
+echo     超分.cmd "D:\video\a.mp4" 2 --denoise 0 --encoder nvenc
 echo.
 echo  其它可透传的参数: --denoise -1^|0^|1^|2^|3  --model  --crf  --preset
 echo                    --encoder  --workdir  --log-file  --keep

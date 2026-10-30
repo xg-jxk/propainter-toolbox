@@ -10,7 +10,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %*
 set "RC=%ERRORLEVEL%"
 echo.
 if "%RC%"=="0" (
-  echo  [OK] 安装完成。可以双击 去水印.cmd / 超分.cmd / 去水印超分.cmd 了。
+  echo  [OK] 安装完成。可以双击 区域修复.cmd / 超分.cmd / 修复超分.cmd 了。
 ) else (
   echo  [X] 安装失败，退出码 %RC%。
   echo      ^-^> 先看 %~dp0setup.log 末尾的报错。

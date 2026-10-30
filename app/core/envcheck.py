@@ -47,7 +47,7 @@ class RuntimeStatus:
     def gpu_text(self):
         if self.gpu_name:
             return "%s（驱动 %s）" % (self.gpu_name, self.driver or "?")
-        return "未检测到 NVIDIA 显卡，将使用 CPU（去水印会非常慢）"
+        return "未检测到 NVIDIA 显卡，将使用 CPU（区域修复会非常慢）"
 
 
 def _nvidia():

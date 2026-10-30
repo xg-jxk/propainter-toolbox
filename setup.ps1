@@ -353,9 +353,9 @@ if ($LASTEXITCODE -ne 0) { Fail "自检失败：torch 无法导入" }
 & $script:Vpy -c "import cv2,scipy,imageio,timm,einops;print('deps ok')"
 if ($LASTEXITCODE -ne 0) { Fail "自检失败：依赖不完整（cv2/scipy/imageio/timm/einops）" }
 
-Say "完成。可以双击 去水印.cmd / 超分.cmd / 去水印超分.cmd 了。"
+Say "完成。可以双击 区域修复.cmd / 超分.cmd / 修复超分.cmd 了。"
 if (-not ($hasNv -and $drvOK)) {
-    Warn "没有可用的 NVIDIA 显卡，去水印会非常慢，建议只用超分。"
+    Warn "没有可用的 NVIDIA 显卡，区域修复会非常慢，建议只用超分。"
 }
 Say "日志已保存：$LogPath"
 

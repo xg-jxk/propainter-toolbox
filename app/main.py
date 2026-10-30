@@ -9,12 +9,13 @@ import sys
 
 from PySide6.QtCore import QSharedMemory
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from pplib import __version__
 
 from .core import config as cfgmod
 from .ui.mainwindow import MainWindow
+from .ui.terms_dialog import TermsDialog
 
 
 def _resource(name):
@@ -48,7 +49,16 @@ def main(argv=None):
                                 "已经有一个窗口在运行了，请切换到那个窗口。")
         return 1
 
-    win = MainWindow()
+    # 首次启动：必须勾选同意使用条款
+    cfg = cfgmod.load()
+    if int(cfg.get("terms_version", 0)) < cfgmod.TERMS_VERSION:
+        dlg = TermsDialog(require_accept=True)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return 1
+        cfg["terms_version"] = cfgmod.TERMS_VERSION
+        cfgmod.save(cfg)
+
+    win = MainWindow(cfg)
     win.show()
     return app.exec()
 

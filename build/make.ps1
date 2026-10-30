@@ -40,15 +40,15 @@ foreach ($d in $runtimeDirs) {
 # tools 只复制四个脚本，且必须落在 dist\tools\ 里（cmd 脚本按 tools\xxx.py 调用）
 $toolsDst = Join-Path $dist "tools"
 New-Item -ItemType Directory -Force -Path $toolsDst | Out-Null
-foreach ($f in @("common.py", "wm_remove.py", "sr_upscale.py", "pipeline.py")) {
+foreach ($f in @("common.py", "region_repair.py", "sr_upscale.py", "pipeline.py")) {
     Copy-Item -LiteralPath (Join-Path $Root "tools\$f") -Destination $toolsDst -Force
 }
 
 $plainFiles = @(
     "inference_propainter.py", "requirements.txt", "requirements-dev.txt",
     "setup.ps1", "setup.cmd", "env.cmd",
-    "去水印.cmd", "超分.cmd", "去水印超分.cmd",
-    "README.md", "LICENSE", "LICENSE-MIT.txt", "THIRD_PARTY.md"
+    "区域修复.cmd", "超分.cmd", "修复超分.cmd",
+    "README.md", "TERMS.md", "LICENSE", "LICENSE-MIT.txt", "THIRD_PARTY.md"
 )
 foreach ($f in $plainFiles) {
     $src = Join-Path $Root $f

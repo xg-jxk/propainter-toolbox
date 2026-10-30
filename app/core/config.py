@@ -6,8 +6,11 @@ import os
 
 APP_DIR_NAME = "ProPainterToolbox"
 
+#: 条款版本：升级条款时 +1，用户下次启动会重新确认
+TERMS_VERSION = 1
+
 DEFAULTS = {
-    "mode": "wm",            # wm | sr | pipeline
+    "mode": "repair",        # repair | sr | pipeline
     "detect": "auto",        # auto | rect | mask
     "rect": "",
     "mask": "",
@@ -23,6 +26,7 @@ DEFAULTS = {
     "keep": False,
     "open_when_done": True,
     "last_dir": "",
+    "terms_version": 0,
     "window": {"w": 1000, "h": 760},
 }
 

@@ -21,8 +21,8 @@ class ParseSpecTest(unittest.TestCase):
 
     def test_minimal(self):
         spec = parse_spec({"video": self.video})
-        self.assertEqual(spec.mode, "wm")
-        self.assertTrue(spec.wm.auto)
+        self.assertEqual(spec.mode, "repair")
+        self.assertTrue(spec.repair.auto)
         self.assertEqual(spec.sr.scale, 2)
 
     def test_mode(self):
@@ -33,19 +33,19 @@ class ParseSpecTest(unittest.TestCase):
 
     def test_missing_video(self):
         with self.assertRaises(JobError):
-            parse_spec({"mode": "wm"})
+            parse_spec({"mode": "repair"})
         with self.assertRaises(JobError):
             parse_spec({"video": os.path.join(self.tmp, "nope.mp4")})
 
     def test_bad_params(self):
         with self.assertRaises(JobError):
-            parse_spec({"video": self.video, "wm": {"padding": 9}})
+            parse_spec({"video": self.video, "repair": {"padding": 9}})
         with self.assertRaises(JobError):
-            parse_spec({"video": self.video, "wm": {"rect": "1,2,3"}})
+            parse_spec({"video": self.video, "repair": {"rect": "1,2,3"}})
         with self.assertRaises(JobError):
-            parse_spec({"video": self.video, "wm": {"rect": "1,2,0,4"}})
+            parse_spec({"video": self.video, "repair": {"rect": "1,2,0,4"}})
         with self.assertRaises(JobError):
-            parse_spec({"video": self.video, "wm": {"encoder": "vulkan"}})
+            parse_spec({"video": self.video, "repair": {"encoder": "vulkan"}})
         with self.assertRaises(JobError):
             parse_spec({"video": self.video, "sr": {"scale": 5}})
         with self.assertRaises(JobError):
@@ -54,8 +54,8 @@ class ParseSpecTest(unittest.TestCase):
             parse_spec({"video": self.video, "intermediate_crf": 99})
 
     def test_rect_ok(self):
-        spec = parse_spec({"video": self.video, "wm": {"rect": "1314，918，320，120"}})
-        self.assertEqual(spec.wm.rect, "1314，918，320，120")  # 全角逗号由 validate 兼容
+        spec = parse_spec({"video": self.video, "repair": {"rect": "1314，918，320，120"}})
+        self.assertEqual(spec.repair.rect, "1314，918，320，120")  # 全角逗号由 validate 兼容
 
 
 class QueueTest(unittest.TestCase):
@@ -90,13 +90,13 @@ class DefaultOutTest(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="ppout_")
         video = os.path.join(tmp, "clip.mp4")
         open(video, "wb").close()
-        first = default_out(video, "wm")
-        self.assertTrue(first.endswith("clip_无水印.mp4"))
+        first = default_out(video, "repair")
+        self.assertTrue(first.endswith("clip_已修复.mp4"))
         open(first, "wb").close()
-        second = default_out(video, "wm")
-        self.assertTrue(second.endswith("clip_无水印(2).mp4"))
+        second = default_out(video, "repair")
+        self.assertTrue(second.endswith("clip_已修复(2).mp4"))
         self.assertTrue(default_out(video, "sr", 3).endswith("clip_3x.mp4"))
-        self.assertTrue(default_out(video, "pipeline", 2).endswith("clip_无水印_2x.mp4"))
+        self.assertTrue(default_out(video, "pipeline", 2).endswith("clip_已修复_2x.mp4"))
 
 
 if __name__ == "__main__":

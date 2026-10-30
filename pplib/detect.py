@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""水印自动检测：白色角标候选 → 聚类 → 多尺度模板跟踪 → 按位置切段。
+"""目标区域自动定位：白色角标候选 → 聚类 → 多尺度模板跟踪 → 按位置切段。
 
 纯 cv2/numpy 逻辑，不依赖 torch，可以单独测。
 """
@@ -38,7 +38,7 @@ def _log(emit, msg):
 # --------------------------------------------------------------- 几何
 
 def crop_geom(box, W, H, padding):
-    """按水印框外扩裁剪，宽高对齐 8 的倍数并保证不越界、不小于 128。"""
+    """按目标框外扩裁剪，宽高对齐 8 的倍数并保证不越界、不小于 128。"""
     x, y, w, h = box
     pad = int(max(w, h) * padding)
     x0, y0 = max(0, x - pad), max(0, y - pad)
@@ -142,7 +142,7 @@ def _match_all(frames, tpl, W, H, rx0, ry0, emit=None):
             b = search(max(rx0, px - m), max(ry0, py - m),
                        min(W, px + pw + m), min(H, py + ph + m))
             if b[0] < 0.45:
-                # 跟丢时全图重找：注意从 (0,0) 开始，否则水印漂到画面另一侧会永远搜不到
+                # 跟丢时全图重找：注意从 (0,0) 开始，否则目标漂到画面另一侧会永远搜不到
                 b = search(0, 0, W, H)
         else:
             b = search(rx0, ry0, W, H)
@@ -211,7 +211,7 @@ def auto_detect(frames, W, H, out_dir=None, thr=None, cfg=None, emit=None):
     segs, cur, prev = [], [], None
     for i in sorted(boxes):
         x, y = boxes[i][0], boxes[i][1]
-        # x、y 同时判断：水印上下移动时不切段，union 框会被拉高、裁剪区域变大
+        # x、y 同时判断：目标上下移动时不切段，union 框会被拉高、裁剪区域变大
         if prev is not None and (abs(x - prev[0]) > int(0.04 * W)
                                  or abs(y - prev[1]) > int(0.04 * H)):
             segs.append(cur)
