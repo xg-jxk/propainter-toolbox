@@ -156,3 +156,5 @@ build/PyInstaller/
 !build/installer.iss
 !build/make_icon.py
 !build/portable-readme.txt
+dist*/
+dist_new/
