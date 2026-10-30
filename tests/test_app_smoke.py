@@ -399,16 +399,18 @@ class AppSmokeTest(unittest.TestCase):
         from pplib.sr import clamp_scale
         from app.ui.panels import pick_scale
 
-        # 720p 源：4x = 5120 长边，没超 8K
+        # 默认 8K 上限
         self.assertEqual(pick_scale(1280, 720, 0), (4, "max"))
-        # 1080p 源：4x = 7680，正好 8K
         self.assertEqual(pick_scale(1920, 1080, 0), (4, "max"))
-        # 4K 源：4x = 15360 超限，最高只能 2x（7680）
-        self.assertEqual(pick_scale(3840, 2160, 0), (2, "max8k"))
-        # 8K 源：再放大必超，直接不可用
+        self.assertEqual(pick_scale(3840, 2160, 0), (2, "max_limited"))
         self.assertEqual(pick_scale(7680, 4320, 0), (0, "too_big"))
-        # 竖屏按长边算：1080x1920 的 4x = 7680，正好
         self.assertEqual(pick_scale(1080, 1920, 0), (4, "max"))
+        # 改成 4K 上限：1080p 源最高只能 2x，4K 源直接不可用
+        self.assertEqual(pick_scale(1920, 1080, 0, 3840), (2, "max_limited"))
+        self.assertEqual(pick_scale(3840, 2160, 0, 3840), (0, "too_big"))
+        # 不限制：4K 源也能 4x
+        self.assertEqual(pick_scale(3840, 2160, 0, 0), (4, "max"))
+        self.assertEqual(pick_scale(1920, 1080, 0, 0), (4, "max"))
 
         # 后端兜底
         self.assertEqual(clamp_scale(3840, 2160, 4), (2, True))
@@ -416,6 +418,10 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(clamp_scale(1280, 720, 4), (4, False))
         self.assertEqual(clamp_scale(7680, 4320, 2), (0, True))
         self.assertEqual(clamp_scale(0, 0, 4), (4, False))
+        # 不限制（limit=0）时按 4x 放行
+        self.assertEqual(clamp_scale(3840, 2160, 4, 0), (4, False))
+        # 4K 上限时 4K 源不可放大
+        self.assertEqual(clamp_scale(3840, 2160, 4, 3840), (0, True))
 
     def test_window_shows_8k_cap(self):
         win = self._win()
@@ -425,8 +431,26 @@ class AppSmokeTest(unittest.TestCase):
         hint = win.sr_panel.scale_hint.text()
         self.assertIn("8K", hint)
         self.assertIn("最高只到 2x", hint)
+        # 改成不限制 → 恢复 4x
+        win.sr_panel.set_cap(0)
+        win.sr_panel.set_target("max")
+        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 4)
+        self.assertEqual(win.sr_panel.options(3840, 2160)["max_output_long"], 0)
         win.close()
 
+    def test_cap_blocks_oversized_source(self):
+        """源超过上限时不能悄悄按 2x 放大，必须报错拦下。"""
+        win = self._win()
+        win.sr_panel.set_enabled_state(True)
+        win.sr_panel.set_cap(3840)
+        win.sr_panel.set_target("max")
+        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 0)
+        with self.assertRaises(ValueError):
+            win._build_spec(r"D:\a.mp4", 3840, 2160)
+        win.sr_panel.set_cap(0)          # 不限制
+        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 4)
+        self.assertEqual(win._build_spec(r"D:\a.mp4", 3840, 2160)["sr"]["scale"], 4)
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

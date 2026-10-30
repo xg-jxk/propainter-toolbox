@@ -10,7 +10,7 @@ import time
 import cv2
 
 from .events import Cancelled, JobError
-from .const import MAX_OUTPUT_LONG
+from .const import DEFAULT_MAX_OUTPUT_LONG
 from .ffmpeg import (CUGAN_DIR, CUGAN_EXE, dir_size, encode_frames,
                      ensure_out_writable, extract_frames, human_size, probe,
                      run_stream)
@@ -115,12 +115,14 @@ def resolve_model(available, wanted, scale, denoise, emit=None):
 
 
 
-def clamp_scale(width, height, scale, limit=None):
+def clamp_scale(width, height, scale, limit=DEFAULT_MAX_OUTPUT_LONG):
     """按 8K 上限收紧倍率。返回 (实际倍率, 是否被收紧)。
 
     limit 默认 MAX_OUTPUT_LONG（长边 7680）；源本身已超限时返回 (0, True)。
     """
-    limit = MAX_OUTPUT_LONG if limit is None else int(limit)
+    limit = DEFAULT_MAX_OUTPUT_LONG if limit is None else int(limit)
+    if limit <= 0:
+        return int(scale), False
     long_side = max(int(width or 0), int(height or 0))
     if long_side <= 0:
         return int(scale), False
@@ -178,13 +180,14 @@ def run_sr(video, opts, emit, out=None, final=True):
         h, w = first.shape[0], first.shape[1]
         # 8K 上限：即使 CLI 传了过大的倍率，也不能放出超 8K 的输出
         long_side = max(w, h)
-        scale_use, capped = clamp_scale(w, h, opts.scale)
+        cap = int(getattr(opts, "max_output_long", DEFAULT_MAX_OUTPUT_LONG) or 0)
+        scale_use, capped = clamp_scale(w, h, opts.scale, cap)
         if scale_use <= 0:
-            raise JobError("源长边 %d 已超过 8K 上限" % long_side,
-                           "把「超分」取消勾选，只做区域修复即可")
+            raise JobError("源长边 %d 已超过所选输出上限" % long_side,
+                           "把「输出上限」调大，或取消勾选「超分」")
         if capped:
-            emit.log("为不超过 8K（长边 %d），倍率从 %dx 降到 %dx"
-                     % (MAX_OUTPUT_LONG, opts.scale, scale_use))
+            emit.log("为不超过输出上限（长边 %d），倍率从 %dx 降到 %dx"
+                     % (cap, opts.scale, scale_use))
 
         denoise = opts.denoise
         if denoise is None:

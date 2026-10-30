@@ -333,6 +333,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.detect_thr.setValue(float(c.get("detect_thr", 0.62)))
         self.repair_panel.ref_stride.setValue(int(c.get("ref_stride", 12)))
         self.sr_panel.set_target(str(c.get("sr_target", "4K")))
+        self.sr_panel.set_cap(int(c.get("sr_max_output", 7680)))
         idx = self.sr_panel.denoise.findData(str(c.get("denoise", "auto")))
         if idx < 0:
             idx = self.sr_panel.denoise.findData(c.get("denoise", "auto"))
@@ -371,6 +372,7 @@ class MainWindow(QMainWindow):
             "detect_thr": round(self.repair_panel.detect_thr.value(), 2),
             "ref_stride": self.repair_panel.ref_stride.value(),
             "sr_target": self.sr_panel.target_key(),
+            "sr_max_output": self.sr_panel.cap_limit(),
             "scale": self.sr_panel.options(
                 self.queue[0].width if len(self.queue) else 0,
                 self.queue[0].height if len(self.queue) else 0)["scale"],
@@ -604,6 +606,8 @@ class MainWindow(QMainWindow):
             raise ValueError("至少启用区域修复或超分")
         repair = self.repair_panel.options()
         sr = self.sr_panel.options(width, height)
+        if self.sr_panel.is_enabled() and not sr.get("scale"):
+            raise ValueError("源分辨率超过了所选输出上限，请调大上限或取消超分")
         repair["crf"] = self.output_panel.crf_value()
         repair["encoder"] = self.output_panel.encoder_value()
         repair["keep"] = self.keep.isChecked()
@@ -646,6 +650,16 @@ class MainWindow(QMainWindow):
                 and not os.path.exists(self.repair_panel.mask.text().strip() or "x"):
             QMessageBox.warning(self, "找不到掩码", "请选择掩码文件或目录")
             return
+        if self.sr_panel.is_enabled():
+            bad = [it.name for it in self.queue
+                   if not self.sr_panel.options(it.width, it.height)["scale"]]
+            if bad:
+                QMessageBox.warning(
+                    self, "超过输出上限",
+                    "以下视频放大后会超过「%s」上限：\n\n%s\n\n"
+                    "把「高级 → 输出上限」调大，或取消勾选「超分」。"
+                    % (self.sr_panel.cap.currentText(), "\n".join(bad[:8])))
+                return
 
         self.queue.reset()
         self._rebuild_table()

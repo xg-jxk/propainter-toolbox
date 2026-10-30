@@ -33,5 +33,8 @@ def normalize_inputs(paths, limit=MAX_QUEUE):
         accepted.append(p)
     return accepted, rejected
 
-#: 输出长边上限（8K 7680×4320）；超过就没必要也没法处理了
+#: 输出长边上限的默认值（8K 7680×4320）；用户可在界面里改，0 表示不限制
 MAX_OUTPUT_LONG = 7680
+DEFAULT_MAX_OUTPUT_LONG = MAX_OUTPUT_LONG
+#: 可选的上限档位（长边）：4K / 8K / 16K / 不限制
+OUTPUT_LIMITS = [("4K", 3840), ("8K", 7680), ("16K", 15360), ("不限制", 0)]

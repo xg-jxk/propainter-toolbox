@@ -86,6 +86,7 @@ class SROptions:
     scale: int = 2
     denoise: Optional[int] = None       # None = 按分辨率自动
     model: str = "models-pro"
+    max_output_long: int = 7680      # 0 = 不限制
     crf: int = 17
     encoder: str = "auto"
     preset: Optional[str] = None
@@ -99,6 +100,7 @@ class SROptions:
             scale=int(_get(d, "scale", 2)),
             denoise=(None if den in (None, "") else int(den)),
             model=str(_get(d, "model", "models-pro")),
+            max_output_long=int(_get(d, "max_output_long", 7680)),
             crf=int(_get(d, "crf", 17)),
             encoder=str(_get(d, "encoder", "auto")),
             preset=_get(d, "preset", None),
@@ -113,6 +115,8 @@ class SROptions:
             raise JobError("denoise 只能是 -1 / 0 / 1 / 2 / 3")
         if not (0 <= self.crf <= 51):
             raise JobError("crf 必须在 0~51 之间")
+        if self.max_output_long and not (2048 <= self.max_output_long <= 16384):
+            raise JobError("max_output_long 只能是 0（不限制）或 2048~16384")
         if self.encoder not in ("auto", "x264", "nvenc"):
             raise JobError("encoder 只能是 auto / x264 / nvenc")
 
