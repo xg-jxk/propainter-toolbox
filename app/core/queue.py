@@ -22,6 +22,8 @@ class QueueItem:
     pct: float = 0.0
     elapsed: float = 0.0
     message: str = ""
+    width: int = 0
+    height: int = 0
 
     @property
     def name(self):

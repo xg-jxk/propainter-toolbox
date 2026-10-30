@@ -38,7 +38,14 @@ class AppSmokeTest(unittest.TestCase):
             os.environ["PPTOOLBOX_CONFIG"] = cls._old_cfg
 
     def _win(self):
+        # 每个用例都从默认配置开始：上一个用例关窗时会保存设置，不清理会互相污染
         from app.ui.mainwindow import MainWindow
+        cfg = os.environ.get("PPTOOLBOX_CONFIG")
+        if cfg and os.path.exists(cfg):
+            try:
+                os.remove(cfg)
+            except OSError:
+                pass
         return MainWindow()
 
     # ------------------------------------------------------------ 基本
@@ -357,6 +364,29 @@ class AppSmokeTest(unittest.TestCase):
             self.assertIn("h264_nvenc", captured["cmd"])
         finally:
             ffmod.run, ffmod.pick_encoder = orig_run, orig_pick
+    def test_probe_size_and_scale_labels(self):
+        """分辨率标签要按源尺寸算：1280x720 的 2x/3x/4x 分别是 1440p/2160p/2880p。"""
+        import subprocess
+        from pplib.ffmpeg import find_ffmpeg, probe_size
+
+        d = tempfile.mkdtemp(prefix="ppsz_")
+        clip = os.path.join(d, "a.mp4")
+        subprocess.run([find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+                        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-t", "0.3",
+                        "-c:v", "libx264", "-preset", "ultrafast", clip], check=True)
+        self.assertEqual(probe_size(clip), (320, 180))
+        self.assertEqual(probe_size(os.path.join(d, "nope.mp4")), (0, 0))
+
+        win = self._win()
+        win.sr_panel.set_source_size(1280, 720)
+        self.assertIn("2560×1440", win.sr_panel.scale.itemText(0))
+        self.assertIn("3840×2160", win.sr_panel.scale.itemText(1))
+        self.assertIn("5120×2880", win.sr_panel.scale.itemText(2))
+        self.assertIn("CPU", win.sr_panel.scale.itemText(2))
+        win.sr_panel.set_scale(3)
+        self.assertEqual(win.sr_panel.options()["scale"], 3)
+        self.assertIn("1280×720", win.sr_panel.scale_hint.text())
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

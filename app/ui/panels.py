@@ -40,6 +40,24 @@ DENOISE_OPTIONS = [("自动", "auto"), ("-1 不降噪", -1), ("0 保守", 0),
 MODEL_OPTIONS = [("models-pro（推荐）", "models-pro"), ("models-se", "models-se")]
 
 
+
+def _k_label(width, height):
+    """按输出宽给出消费级分辨率叫法。"""
+    if not (width and height):
+        return ""
+    if width >= 7600:
+        return "8K"
+    if width >= 5000:
+        return "5K"
+    if width >= 3700:
+        return "4K"
+    if width >= 2500:
+        return "2K"
+    if width >= 1880:
+        return "1080p"
+    return "%dp" % int(height)
+
+
 def _spin(lo, hi, val, suffix=""):
     sp = QSpinBox()
     sp.setRange(lo, hi)
@@ -170,24 +188,72 @@ class SRPanel(ModuleCard):
         super().__init__("超分（Real-CUGAN）", "scale", checked=enabled, parent=parent)
         g = self.grid
 
-        self.scale = SegmentedControl(SCALE_OPTIONS, 2)
-        g.addWidget(label_with_info("超分倍率", "scale"), 0, 0)
+        self.scale = QComboBox()
+        self.scale.setMinimumWidth(220)
+        g.addWidget(label_with_info("输出分辨率", "scale"), 0, 0)
         g.addWidget(attach(self.scale, "scale"), 0, 1, 1, 3)
+        self.scale_hint = QLabel("加入视频后按源尺寸显示实际输出")
+        self.scale_hint.setObjectName("hintLabel")
+        self.scale_hint.setWordWrap(True)
+        g.addWidget(self.scale_hint, 1, 0, 1, 4)
+        self._src_w, self._src_h = 0, 0
+        self.set_source_size(0, 0)
+        self.scale.currentIndexChanged.connect(lambda _i: self._refresh_hint())
 
         self.denoise = _combo(DENOISE_OPTIONS, "auto")
-        g.addWidget(label_with_info("降噪", "denoise"), 1, 0)
-        g.addWidget(attach(self.denoise, "denoise"), 1, 1, 1, 3)
+        g.addWidget(label_with_info("降噪", "denoise"), 2, 0)
+        g.addWidget(attach(self.denoise, "denoise"), 2, 1, 1, 3)
 
         self.advanced = Collapsible("高级：超分模型")
         self.model = _combo(MODEL_OPTIONS, "models-pro")
         self.advanced.grid.addWidget(label_with_info("模型", "model"), 0, 0)
         self.advanced.grid.addWidget(attach(self.model, "model"), 0, 1)
-        g.addWidget(self.advanced, 2, 0, 1, 4)
+        g.addWidget(self.advanced, 3, 0, 1, 4)
+
+    def set_source_size(self, width, height):
+        """按源尺寸重建选项文字（2x/3x/4x 对应的实际分辨率）。"""
+        self._src_w, self._src_h = int(width or 0), int(height or 0)
+        current = self.scale_value()
+        blocked = self.scale.blockSignals(True)
+        self.scale.clear()
+        for s in (2, 3, 4):
+            if self._src_w and self._src_h:
+                ow, oh = self._src_w * s, self._src_h * s
+                text = "%dx → %d×%d（%s）" % (s, ow, oh, _k_label(ow, oh))
+                if ow > 4096 or oh > 4096:
+                    text += "  CPU 编码"
+            else:
+                text = "%dx（加入视频后显示实际尺寸）" % s
+            self.scale.addItem(text, s)
+        self.scale.blockSignals(blocked)
+        self.set_scale(current)
+        self._refresh_hint()
+
+    def set_scale(self, scale):
+        idx = self.scale.findData(int(scale))
+        if idx >= 0:
+            self.scale.setCurrentIndex(idx)
+        self._refresh_hint()
+
+    def scale_value(self):
+        data = self.scale.currentData()
+        return int(data) if data else 2
+
+    def _refresh_hint(self):
+        if not (self._src_w and self._src_h):
+            self.scale_hint.setText("加入视频后按源尺寸显示实际输出")
+            return
+        s = self.scale_value()
+        ow, oh = self._src_w * s, self._src_h * s
+        txt = "源 %d×%d · 当前输出 %d×%d（%s）" % (self._src_w, self._src_h, ow, oh, _k_label(ow, oh))
+        if ow > 4096 or oh > 4096:
+            txt += " · 超过显卡 H.264 上限，会自动用 CPU 编码"
+        self.scale_hint.setText(txt)
 
     def options(self):
         denoise = self.denoise.currentData()
         return {
-            "scale": int(self.scale.value() or 2),
+            "scale": self.scale_value(),
             "denoise": None if denoise == "auto" else int(denoise),
             "model": self.model.currentData(),
             "crf": 17,
@@ -196,7 +262,7 @@ class SRPanel(ModuleCard):
         }
 
     def apply_preset(self, preset):
-        pass  # 预设不改倍率，避免用户以为画质档位会换分辨率
+        pass  # 预设不改输出分辨率
 
 
 class OutputPanel(QFrame):

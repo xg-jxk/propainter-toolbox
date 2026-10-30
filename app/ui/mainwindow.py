@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.detect.changed.connect(self._update_preview)
         self.repair_panel.padding.valueChanged.connect(self._update_preview)
         self.repair_panel.rect.textChanged.connect(self._update_preview)
-        self.sr_panel.scale.changed.connect(self._update_preview)
+        self.sr_panel.scale.currentIndexChanged.connect(self._update_preview)
         self.output_panel.out_dir.textChanged.connect(self._update_preview)
         self.output_panel.crf.valueChanged.connect(self._update_preview)
         self.output_panel.test_mode.toggled.connect(self._update_preview)
@@ -330,7 +330,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.mask_dilation.setValue(int(c.get("mask_dilation", 2)))
         self.repair_panel.detect_thr.setValue(float(c.get("detect_thr", 0.62)))
         self.repair_panel.ref_stride.setValue(int(c.get("ref_stride", 12)))
-        self.sr_panel.scale.set_value(int(c.get("scale", 2)))
+        self.sr_panel.set_scale(int(c.get("scale", 2)))
         idx = self.sr_panel.denoise.findData(str(c.get("denoise", "auto")))
         if idx < 0:
             idx = self.sr_panel.denoise.findData(c.get("denoise", "auto"))
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
             "mask_dilation": self.repair_panel.mask_dilation.value(),
             "detect_thr": round(self.repair_panel.detect_thr.value(), 2),
             "ref_stride": self.repair_panel.ref_stride.value(),
-            "scale": int(self.sr_panel.scale.value() or 2),
+            "scale": self.sr_panel.scale_value(),
             "denoise": str(self.sr_panel.denoise.currentData()),
             "model": self.sr_panel.model.currentData(),
             "out_dir": self.output_panel.out_dir_text(),
@@ -419,7 +419,7 @@ class MainWindow(QMainWindow):
     def _update_preview(self, *_):
         video = self.queue[0].path if len(self.queue) else os.path.join("D:\\video", "a.mp4")
         mode = self._mode() or "repair"
-        scale = int(self.sr_panel.scale.value() or 2)
+        scale = self.sr_panel.scale_value()
         preview = self.output_panel.test_mode.isChecked()
         path = self.output_panel.out_path(video, mode, scale, preview=preview)
         if not path:
@@ -496,6 +496,8 @@ class MainWindow(QMainWindow):
 
     def add_files(self, paths):
         added, rejected = self.queue.add_paths(paths)
+        for item in added:
+            self._probe_item(item)
         if added:
             self._rebuild_table()
             self.append_log("已加入 %d 个文件" % len(added))
@@ -508,6 +510,25 @@ class MainWindow(QMainWindow):
         self._refresh_queue_label()
         self._update_preview()
 
+    def _probe_item(self, item):
+        """记录源分辨率，用于把倍率显示成实际输出尺寸。"""
+        if item.width and item.height:
+            return
+        try:
+            from pplib.ffmpeg import probe_size
+            w, h = probe_size(item.path)
+            if w and h:
+                item.width, item.height = w, h
+        except Exception:
+            pass
+
+    def _sync_scale_labels(self):
+        if len(self.queue):
+            it = self.queue[0]
+            self.sr_panel.set_source_size(it.width, it.height)
+        else:
+            self.sr_panel.set_source_size(0, 0)
+
     def remove_selected(self):
         rows = sorted({i.row() for i in self.table.selectedItems()}, reverse=True)
         if not rows:
@@ -519,6 +540,7 @@ class MainWindow(QMainWindow):
             self.queue.remove(r)
         self._rebuild_table()
         self._refresh_queue_label()
+        self._sync_scale_labels()
         self._update_preview()
 
     def clear_queue(self):
@@ -528,6 +550,7 @@ class MainWindow(QMainWindow):
         self.queue.clear()
         self._rebuild_table()
         self._refresh_queue_label()
+        self._sync_scale_labels()
         self._update_preview()
 
     def _refresh_queue_label(self):

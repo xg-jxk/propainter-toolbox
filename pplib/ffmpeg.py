@@ -112,6 +112,25 @@ def probe(video):
     return fps, ("Audio:" in info), dur
 
 
+
+
+_SIZE_RE = re.compile(r"Video:.*?[,\s](\d{2,5})x(\d{2,5})")
+
+
+def probe_size(video):
+    """只取分辨率，返回 (宽, 高)；失败返回 (0, 0)。"""
+    try:
+        p = subprocess.run([find_ffmpeg(), "-hide_banner", "-i", str(video)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           text=True, errors="ignore")
+        m = _SIZE_RE.search(p.stderr or "")
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return 0, 0
+
+
 # --------------------------------------------------------------- 子进程
 
 def _stderr_tail(path, limit=3000):
