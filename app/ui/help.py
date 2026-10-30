@@ -122,8 +122,9 @@ def info_icon(key, parent=None):
 
 
 def attach(widget, key):
-    """给控件本身也挂一份同样的说明，扩大悬停热区。"""
+    """控件本身也挂说明：气泡用浅色版（bubble_html），原生 tooltip 保留一份。"""
     widget.setToolTip(tooltip_html(key))
+    widget.setProperty("bubble_html", bubble_html(key))
     return widget
 
 

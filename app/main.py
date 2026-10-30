@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QMessageBox, QProxyStyle,
 
 from pplib import __version__
 
+from .ui import bubble as bubble_ui
 from .core import config as cfgmod
 from .ui.mainwindow import MainWindow
 from .ui.terms_dialog import TermsDialog
@@ -48,6 +49,7 @@ def main(argv=None):
     app.setApplicationName("ProPainter Toolbox")
     app.setApplicationVersion(__version__)
     app.setStyle(_InstantTipStyle("Fusion"))
+    bubble_ui.install(app)  # 全应用统一气泡，替掉原生 tooltip
     _apply_style(app)
     icon = _resource("app.ico")
     if os.path.isfile(icon):

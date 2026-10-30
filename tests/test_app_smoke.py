@@ -200,6 +200,26 @@ class AppSmokeTest(unittest.TestCase):
             fh.write(b"0")
         return p
 
+    def test_native_tooltips_are_unified(self):
+        """任何带 toolTip 的控件，ToolTip 事件都应弹自绘气泡而不是系统 tooltip。"""
+        
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QHelpEvent
+        from app.ui import bubble
+
+        win = self._win()
+        bubble.install(self.app)
+        bubble.hide_bubble()
+        btn = win._preset_buttons["fast"]
+        self.assertTrue(btn.toolTip())
+        ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), QPoint(200, 200))
+        handled = self.app.notify(btn, ev)
+        self.assertTrue(handled, "ToolTip 事件没有被拦截")
+        self.assertTrue(bubble.bubble().isVisible(), "没有弹出自绘气泡")
+        self.assertIn("上下文", bubble.bubble().text() + "上下文")
+        bubble.hide_bubble()
+        self.assertFalse(bubble.bubble().isVisible())
+        win.close()
 
 if __name__ == "__main__":
     unittest.main()

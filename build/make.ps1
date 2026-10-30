@@ -2,12 +2,14 @@
 # 一键打包桌面应用：装 PyInstaller → 生成 exe → 复制运行时脚本 → 可选打便携 zip
 #
 # 用法：  powershell -NoProfile -ExecutionPolicy Bypass -File build\make.ps1
-#         powershell ... -File build\make.ps1 -SkipInstall   # 已装过 PyInstaller
+#         powershell ... -File build\make.ps1 -SkipInstall        # 已装过 PyInstaller
 #         powershell ... -File build\make.ps1 -SkipInstall -Zip   # 同时产出便携包
+#         powershell ... -File build\make.ps1 -DistRoot dist_new  # 输出到别的目录（程序在运行时用这个）
 param(
     [switch]$SkipInstall,
     [switch]$Zip,
-    [string]$Python = ""
+    [string]$Python = "",
+    [string]$DistRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,9 +25,26 @@ if (-not (Test-Path -LiteralPath $py)) {
     throw "找不到 Python：$py（先运行 setup.cmd，或用 -Python 指定解释器）"
 }
 
+$distBase = if ($DistRoot) { Join-Path $Root $DistRoot } else { Join-Path $Root "dist" }
+
+# ---- 保护：只有写默认的 dist 时才需要程序没在运行（否则会删掉正在用的文件）；
+#      用 -DistRoot 输出到别的目录不受影响
+if (-not $DistRoot) {
+    $running = Get-Process -Name ProPainterToolbox -ErrorAction SilentlyContinue
+    if ($running) {
+        $pids = ($running | ForEach-Object { $_.Id }) -join ","
+        throw "检测到 ProPainterToolbox.exe 正在运行（pid=$pids）。请先关闭程序，或用 -DistRoot dist_build 输出到别的目录。"
+    }
+}
+if ((-not $DistRoot) -and (Test-Path -LiteralPath $distBase)) {
+    # 默认输出目录：清掉旧的构建产物（此时已确认程序没在跑）
+    Get-ChildItem -LiteralPath $distBase -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force -Path $distBase | Out-Null
+
 $version = (& $py -c "import pplib;print(pplib.__version__)").Trim()
 if (-not $version) { $version = "0.0.0" }
-Write-Host "[build] 版本：$version" -ForegroundColor Cyan
+Write-Host "[build] 版本：$version   输出：$distBase" -ForegroundColor Cyan
 
 if (-not $SkipInstall) {
     Write-Host "[build] 安装 PyInstaller ..." -ForegroundColor Cyan
@@ -34,11 +53,11 @@ if (-not $SkipInstall) {
 }
 
 Write-Host "[build] 生成 exe ..." -ForegroundColor Cyan
-& $py -m PyInstaller "build\app.spec" --noconfirm --clean
+& $py -m PyInstaller "build\app.spec" --noconfirm --clean --distpath $distBase --workpath "$Root\build\work"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 
-$dist = Join-Path $Root "dist\ProPainterToolbox"
-if (-not (Test-Path -LiteralPath $dist)) { throw "没有产出 dist\ProPainterToolbox" }
+$dist = Join-Path $distBase "ProPainterToolbox"
+if (-not (Test-Path -LiteralPath $dist)) { throw "没有产出 $dist" }
 
 # GUI 只是外壳：真正的推理仍然调用这里的脚本和 .venv
 # 注意：不要整目录复制 tools/，里面还有 tools/python（便携解释器）和 tools/realcugan（45MB）
@@ -81,7 +100,7 @@ Write-Host "[build] 目录体积：$size MB（不含 .venv / weights，首次启
 Write-Host "[build] 双击 ProPainterToolbox.exe 即可运行" -ForegroundColor Green
 
 if ($Zip) {
-    $zipPath = Join-Path $Root ("dist\ProPainterToolbox-{0}-portable.zip" -f $version)
+    $zipPath = Join-Path $distBase ("ProPainterToolbox-{0}-portable.zip" -f $version)
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
     Write-Host "[build] 打便携包 ..." -ForegroundColor Cyan
     Compress-Archive -Path $dist -DestinationPath $zipPath -CompressionLevel Optimal
