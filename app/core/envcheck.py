@@ -68,7 +68,9 @@ def _nvidia():
 
 def _has_nvenc():
     try:
-        ff = find_ffmpeg()
+        ff = find_ffmpeg_path(allow_import=False) or find_ffmpeg_path()
+        if not ff:
+            return False
         p = subprocess.run([ff, "-hide_banner", "-encoders"], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True, errors="ignore", timeout=10)
         return "h264_nvenc" in (p.stdout or "")
