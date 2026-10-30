@@ -73,6 +73,19 @@ class AppSmokeTest(unittest.TestCase):
         self.assertTrue(dlg.btn_ok.isEnabled())
         self.assertFalse(dlg.check.isVisible())
         dlg.close()
+    def test_ffmpeg_detection_without_imageio_import(self):
+        # 打包后的 exe 里 import 不到 imageio_ffmpeg，只能靠路径定位
+        from app.core import envcheck
+        path = envcheck.find_ffmpeg_path(allow_import=False)
+        if path is None:
+            self.skipTest("本机 PATH/.venv 里都没有 ffmpeg 二进制")
+        self.assertTrue(os.path.isfile(path), path)
+
+    def test_runtime_check_shape(self):
+        from app.core import envcheck
+        st = envcheck.check()
+        self.assertIsInstance(st.ready, bool)
+        self.assertIsInstance(st.ffmpeg_ok, bool)
 
 if __name__ == "__main__":
     unittest.main()

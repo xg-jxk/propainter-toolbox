@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """运行环境自检：.venv / 权重 / Real-CUGAN / ffmpeg / 显卡。"""
+import glob
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from pplib.const import WEIGHT_FILES
-from pplib.ffmpeg import CUGAN_DIR, CUGAN_EXE, ROOT, WEIGHTS, find_ffmpeg
+from pplib.ffmpeg import CUGAN_DIR, CUGAN_EXE, ROOT, WEIGHTS
 
 VENV_PYTHON = os.path.join(str(ROOT), ".venv", "Scripts", "python.exe")
 VENV_PYTHONW = os.path.join(str(ROOT), ".venv", "Scripts", "pythonw.exe")
@@ -74,14 +76,50 @@ def _has_nvenc():
         return False
 
 
+def find_ffmpeg_path(allow_import=True):
+    """定位 ffmpeg —— 不依赖 import imageio_ffmpeg。
+
+    打包后的 exe 里 imageio_ffmpeg 被排除了（它带 83 MB 二进制，不值得打进壳），
+    所以这里优先用"看得见"的路径，最后才尝试 import（源码运行时才走得到）。
+    """
+    env = os.environ.get("FFMPEG")
+    if env and os.path.isfile(env):
+        return env
+
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+
+    exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    cand = os.path.join(str(ROOT), "tools", "ffmpeg", exe_name)
+    if os.path.isfile(cand):
+        return cand
+
+    # 运行时装在 .venv 里：直接找 imageio-ffmpeg 自带的二进制
+    patterns = [
+        os.path.join(str(ROOT), ".venv", "Lib", "site-packages",
+                     "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
+        os.path.join(str(ROOT), ".venv", "lib", "python*", "site-packages",
+                     "imageio_ffmpeg", "binaries", "ffmpeg*"),
+    ]
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+
+    if allow_import:
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
+    return None
+
+
 def check():
     st = RuntimeStatus()
     st.venv_ok = os.path.isfile(VENV_PYTHON)
-    try:
-        find_ffmpeg()
-        st.ffmpeg_ok = True
-    except Exception:
-        st.ffmpeg_ok = False
+    st.ffmpeg_ok = find_ffmpeg_path() is not None
     st.cugan_ok = os.path.isfile(str(CUGAN_EXE)) and os.path.isdir(os.path.join(str(CUGAN_DIR), "models-pro"))
     st.weights_missing = [n for n in WEIGHT_FILES
                           if not os.path.isfile(os.path.join(str(WEIGHTS), n))
