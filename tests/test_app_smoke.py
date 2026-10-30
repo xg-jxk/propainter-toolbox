@@ -452,5 +452,34 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(win._build_spec(r"D:\a.mp4", 3840, 2160)["sr"]["scale"], 4)
         win.close()
 
+    def test_missing_size_is_probed_before_start(self):
+        """加入时没读到分辨率，开始前必须补探测，避免默默按 2x。"""
+        import subprocess
+        from pplib.ffmpeg import find_ffmpeg
+
+        d = tempfile.mkdtemp(prefix="ppprobe_")
+        clip = os.path.join(d, "a.mp4")
+        subprocess.run([find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+                        "-f", "lavfi", "-i", "color=c=black:s=1920x1080", "-t", "0.3",
+                        "-c:v", "libx264", "-preset", "ultrafast", clip], check=True)
+
+        win = self._win()
+        win.sr_panel.set_enabled_state(True)
+        win.sr_panel.set_target("max")
+        win.sr_panel.set_cap(7680)
+        win.queue.add_paths([clip])
+        win.queue[0].width = 0          # 模拟加入时探测失败
+        win.queue[0].height = 0
+        win._rebuild_table()
+
+        captured = {}
+        win.runner.start = lambda spec: captured.setdefault("spec", spec)
+        win._start_next()
+        self.assertEqual(win.queue[0].width, 1920)
+        self.assertEqual(win.queue[0].height, 1080)
+        self.assertEqual(captured["spec"]["sr"]["scale"], 4)
+        win.close()
+
+
 if __name__ == "__main__":
     unittest.main()

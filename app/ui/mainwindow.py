@@ -590,7 +590,7 @@ class MainWindow(QMainWindow):
             if status == "capped":
                 size_txt += "（封顶）"
         else:
-            size_txt = "—"
+            size_txt = "?"
         size_cell = QTableWidgetItem(size_txt)
         size_cell.setToolTip("按目标 %s 计算：%dx" % (self.sr_panel.target_key(), scale))
         self.table.setItem(row, COL_SIZE, size_cell)
@@ -684,6 +684,10 @@ class MainWindow(QMainWindow):
             buckets[tag] = buckets.get(tag, 0) + 1
         detail = "，".join("%s ×%d" % (k, v) for k, v in sorted(buckets.items()))
         self.append_log("目标 %s：%s" % (self.sr_panel.target_key(), detail))
+        unknown = [it.name for it in self.queue if not (it.width and it.height)]
+        if unknown:
+            self.append_log("⚠ %d 个文件读不到分辨率，会按固定 2x 处理：%s"
+                            % (len(unknown), "、".join(unknown[:3])))
         over = [it for it in self.queue if pick_scale(
             it.width, it.height, self.sr_panel.target_long())[1] == "unreachable"]
         if over:
@@ -697,6 +701,12 @@ class MainWindow(QMainWindow):
             return
         item = self.queue[idx]
         self._current = idx
+        if not (item.width and item.height):
+            self._probe_item(item)      # 加入时没读到就再试一次
+            if item.width and item.height:
+                self._sync_scale_labels()
+            else:
+                self.append_log("⚠ 读不到 %s 的分辨率，本次按固定 2x 处理" % item.name)
         item.status = STATUS_RUNNING
         self._fill_row(idx, item)
         self.table.selectRow(idx)
