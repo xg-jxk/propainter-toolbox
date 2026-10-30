@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from pplib.const import WEIGHT_FILES
+from pplib import winproc
 from pplib.ffmpeg import CUGAN_DIR, CUGAN_EXE, ROOT, WEIGHTS
 
 VENV_PYTHON = os.path.join(str(ROOT), ".venv", "Scripts", "python.exe")
@@ -54,7 +55,7 @@ class RuntimeStatus:
 
 def _nvidia():
     try:
-        out = subprocess.run(
+        out = winproc.run(
             ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
         if out.returncode == 0 and out.stdout.strip():
@@ -71,7 +72,7 @@ def _has_nvenc():
         ff = find_ffmpeg_path(allow_import=False) or find_ffmpeg_path()
         if not ff:
             return False
-        p = subprocess.run([ff, "-hide_banner", "-encoders"], stdout=subprocess.PIPE,
+        p = winproc.run([ff, "-hide_banner", "-encoders"], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True, errors="ignore", timeout=10)
         return "h264_nvenc" in (p.stdout or "")
     except Exception:
@@ -140,7 +141,7 @@ def torch_info(python_exe=None):
         return "未安装"
     code = ("import torch;print('%s cuda=%s' % (torch.__version__, torch.cuda.is_available()))")
     try:
-        p = subprocess.run([exe, "-c", code], stdout=subprocess.PIPE,
+        p = winproc.run([exe, "-c", code], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True, timeout=90,
                            encoding="utf-8", errors="replace")
         if p.returncode == 0:

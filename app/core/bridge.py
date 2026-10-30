@@ -8,8 +8,9 @@ import os
 import subprocess
 import tempfile
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
+from pplib import winproc
 from pplib.ffmpeg import ROOT
 
 CREATE_NO_WINDOW = 0x08000000
@@ -51,14 +52,28 @@ class JobRunner(QObject):
         self._result = {}
         self._error = None
 
+        # GUI 没有控制台，python.exe 会弹出黑窗；同目录的 pythonw.exe 是窗口子系统，不会
+        exe = self._quiet_python(self.python_exe)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         env.insert("PYTHONUTF8", "1")
         env.insert("PP_ROOT", str(ROOT))
         self._proc.setProcessEnvironment(env)
         self._proc.setWorkingDirectory(str(ROOT))
-        self._proc.start(self.python_exe, ["-m", "pplib.runner", "--spec", path, "--jsonl"])
+        self._proc.start(exe, ["-m", "pplib.runner", "--spec", path, "--jsonl"])
         self.started.emit()
+
+    @staticmethod
+    def _quiet_python(python_exe):
+        """优先用 pythonw.exe，避免弹出控制台窗口。"""
+        try:
+            import os as _os
+            cand = _os.path.join(_os.path.dirname(str(python_exe)), "pythonw.exe")
+            if _os.path.isfile(cand):
+                return cand
+        except Exception:
+            pass
+        return str(python_exe)
 
     def cancel(self):
         self._cancelled = True
@@ -67,9 +82,10 @@ class JobRunner(QObject):
         pid = int(self._proc.processId() or 0)
         if pid:
             try:  # Windows 上 QProcess.kill 只杀父进程，torch 的子进程会变孤儿
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               creationflags=CREATE_NO_WINDOW)
+                winproc.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # 兜底：5 秒还没退出就强杀，避免界面卡在"正在取消…"
+                QTimer.singleShot(5000, self._force_kill)
                 return
             except Exception:
                 pass
@@ -157,6 +173,11 @@ class JobRunner(QObject):
         else:
             state = "failed"
         self.finished.emit(state, payload)
+
+    def _force_kill(self):
+        if self.is_running():
+            self.logLine.emit("[提示] 进程未在 5 秒内退出，已强制结束")
+            self._proc.kill()
 
     def _on_error(self, err):
         if err == QProcess.ProcessError.FailedToStart:

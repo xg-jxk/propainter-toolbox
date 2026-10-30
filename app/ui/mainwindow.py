@@ -310,6 +310,7 @@ class MainWindow(QMainWindow):
         self.output_panel.test_seconds.valueChanged.connect(self._update_preview)
         self.output_panel.test_start.valueChanged.connect(self._update_preview)
 
+        self.runner.started.connect(self._on_runner_started)
         self.runner.logLine.connect(self.append_log)
         self.runner.stageChanged.connect(self._on_stage)
         self.runner.progressChanged.connect(self._on_progress)
@@ -713,7 +714,11 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.status_label.setText("准备：%s" % item.name)
         self.append_log("→ %s" % item.path)
+        self.status_label.setText("正在启动运行时…")
         self.runner.start(self._build_spec(item.path, item.width, item.height))
+
+    def _on_runner_started(self):
+        self.status_label.setText("运行时已启动，等待输出…")
 
     def _on_stage(self, name, pct):
         self.progress.setValue(int(pct))

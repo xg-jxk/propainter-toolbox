@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
-"""首次运行 / 缺少运行时的安装向导：调用 setup.ps1 并实时显示日志。"""
+"""首次运行 / 缺少运行时的安装向导：调用 setup.ps1 并实时显示日志。
+
+用 subprocess + 线程读输出，而不是 QProcess：PySide6 没有暴露
+setCreateProcessArgumentsModifier，无法给 QProcess 加 CREATE_NO_WINDOW，
+拉起 powershell 时必然闪一个控制台窗口。
+"""
 import os
 import subprocess
 
-from PySide6.QtCore import QProcess, Qt, Signal
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPlainTextEdit,
                                QProgressBar, QPushButton, QVBoxLayout)
 
+from pplib import winproc
 from pplib.ffmpeg import ROOT
-
-CREATE_NO_WINDOW = 0x08000000
 
 
 def _decode(data):
+    if isinstance(data, str):
+        return data
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
@@ -22,6 +28,42 @@ def _decode(data):
             return data.decode("latin-1", "replace")
 
 
+class _SetupRunner(QThread):
+    """后台跑 setup.ps1，逐行把输出发回界面。"""
+
+    line = Signal(str)
+    done = Signal(int)
+
+    def __init__(self, cmd, cwd, parent=None):
+        super().__init__(parent)
+        self._cmd = cmd
+        self._cwd = cwd
+        self._proc = None
+
+    def run(self):
+        try:
+            self._proc = winproc.popen(
+                self._cmd, cwd=self._cwd,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, bufsize=0)
+        except Exception as e:
+            self.line.emit("[错误] 无法启动安装进程：%s" % e)
+            self.done.emit(-1)
+            return
+        try:
+            for raw in iter(self._proc.stdout.readline, b""):
+                text = _decode(raw).rstrip()
+                if text:
+                    self.line.emit(text)
+        except Exception as e:
+            self.line.emit("[错误] 读取安装输出失败：%s" % e)
+        try:
+            code = self._proc.wait(timeout=10)
+        except Exception:
+            code = -1
+        self.done.emit(code)
+
+
 class InstallDialog(QDialog):
     finishedOk = Signal()
 
@@ -29,7 +71,7 @@ class InstallDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("安装运行时")
         self.resize(860, 560)
-        self._proc = None
+        self._runner = None
         self._ok = False
 
         lay = QVBoxLayout(self)
@@ -68,25 +110,17 @@ class InstallDialog(QDialog):
             self.bar.setRange(0, 1)
             self.bar.setValue(0)
             return
-        self._proc = QProcess(self)
-        self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self._proc.readyRead.connect(self._on_read)
-        self._proc.finished.connect(self._on_finished)
-        self._proc.setWorkingDirectory(str(ROOT))
-        self._append("执行：powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1")
-        self._proc.start("powershell",
-                         ["-NoProfile", "-ExecutionPolicy", "Bypass",
-                          "-File", setup])
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+               "-WindowStyle", "Hidden", "-File", setup]
+        self._append("执行：powershell -NoProfile -ExecutionPolicy Bypass "
+                     "-WindowStyle Hidden -File setup.ps1")
+        self._runner = _SetupRunner(cmd, str(ROOT), self)
+        self._runner.line.connect(self._append)
+        self._runner.done.connect(self._on_done)
+        self._runner.start()
         self.status.setText("安装中…（可以先去忙别的，完成后会提示）")
 
-    def _on_read(self):
-        if not self._proc:
-            return
-        data = bytes(self._proc.readAll())
-        if data:
-            self._append(_decode(data).rstrip())
-
-    def _on_finished(self, code, _status):
+    def _on_done(self, code):
         self.bar.setRange(0, 1)
         self.bar.setValue(1 if code == 0 else 0)
         if code == 0:
@@ -101,11 +135,11 @@ class InstallDialog(QDialog):
     def _append(self, text):
         if not text:
             return
-        for line in text.splitlines():
+        for line in str(text).splitlines():
             self.log.appendPlainText(line)
 
     def _on_close(self):
-        if self._proc and self._proc.state() != QProcess.ProcessState.NotRunning:
+        if self._runner is not None and self._runner.isRunning():
             self.status.setText("仍在安装：可以关闭窗口，后台会继续；下次打开会自动跳过已完成步骤")
         self.accept()
 

@@ -4,6 +4,8 @@ import os
 import re
 import shutil
 import subprocess
+
+from . import winproc
 import sys
 import tempfile
 import time
@@ -92,7 +94,7 @@ def cut_clip(src, dst, start, seconds, emit=None):
 def probe(video):
     """返回 (fps, 是否有音轨, 时长秒)。fps 优先取精确的 tbr，取不到退回 30。"""
     ff = find_ffmpeg()
-    p = subprocess.run([ff, "-hide_banner", "-i", str(video)],
+    p = winproc.run([ff, "-hide_banner", "-i", str(video)],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, errors="ignore")
     info = p.stderr or ""
@@ -120,7 +122,7 @@ _SIZE_RE = re.compile(r"Video:.*?[,\s](\d{2,5})x(\d{2,5})")
 def probe_size(video):
     """只取分辨率，返回 (宽, 高)；失败返回 (0, 0)。"""
     try:
-        p = subprocess.run([find_ffmpeg(), "-hide_banner", "-i", str(video)],
+        p = winproc.run([find_ffmpeg(), "-hide_banner", "-i", str(video)],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            text=True, errors="ignore")
         m = _SIZE_RE.search(p.stderr or "")
@@ -148,7 +150,7 @@ def run(cmd, cwd=None, env=None, emit=None, label=None):
     tmp.close()
     try:
         with open(tmp.name, "wb") as err:
-            p = subprocess.run(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=err)
+            p = winproc.run(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=err)
         if p.returncode != 0:
             tail = _stderr_tail(tmp.name)
             if emit:
@@ -174,7 +176,7 @@ def run_stream(cmd, on_line=None, cwd=None, env=None, emit=None, label=None):
     p = None
     try:
         with open(tmp.name, "wb") as err:
-            p = subprocess.Popen(cmd, cwd=cwd, env=env,
+            p = winproc.popen(cmd, cwd=cwd, env=env,
                                  stdout=subprocess.PIPE, stderr=err,
                                  encoding="utf-8", errors="replace", bufsize=1)
             try:
@@ -307,7 +309,7 @@ def pick_encoder(prefer="auto"):
         return _encoder
     _encoder = "libx264"
     try:
-        p = subprocess.run([find_ffmpeg(), "-hide_banner", "-encoders"],
+        p = winproc.run([find_ffmpeg(), "-hide_banner", "-encoders"],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            text=True, errors="ignore")
         if "h264_nvenc" in (p.stdout or ""):

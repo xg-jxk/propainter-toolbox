@@ -480,6 +480,16 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(captured["spec"]["sr"]["scale"], 4)
         win.close()
 
+    def test_bridge_prefers_pythonw(self):
+        """任务进程优先用 pythonw.exe，避免 GUI 拉起黑窗。"""
+        from app.core.bridge import JobRunner
+        d = tempfile.mkdtemp(prefix="pppy_")
+        py = os.path.join(d, "python.exe")
+        open(py, "w").close()
+        self.assertEqual(JobRunner._quiet_python(py), py)
+        pyw = os.path.join(d, "pythonw.exe")
+        open(pyw, "w").close()
+        self.assertEqual(JobRunner._quiet_python(py), pyw)
 
 if __name__ == "__main__":
     unittest.main()
