@@ -274,16 +274,12 @@ class SRPanel(ModuleCard):
 
         self.add_separator()
 
+        self.add_field(Field("cap", "输出上限", self.cap, _hint("cap")))
+        self.cap.currentIndexChanged.connect(lambda _i: self._rebuild())
+
         self.denoise = _combo(DENOISE_OPTIONS, "auto")
         self.add_field(Field("denoise", "降噪", self.denoise, _hint("denoise")))
-
-        self.advanced = Collapsible("高级参数")
-        self.advanced.add_field(Field("cap", "输出上限", self.cap, _hint("cap")))
-        self.model = _combo(MODEL_OPTIONS, "models-pro")
-        self.advanced.add_field(Field("model", "模型", self.model, _hint("model")))
-        self.vbox.addWidget(self.advanced)
         self.vbox.addStretch(1)
-        self.cap.currentIndexChanged.connect(lambda _i: self._rebuild())
 
     # ---------------------------------------------------------- 档位
     def set_source_size(self, width, height):
@@ -415,7 +411,7 @@ class SRPanel(ModuleCard):
             "scale": int(scale or 0),
             "max_output_long": limit,
             "denoise": None if denoise == "auto" else int(denoise),
-            "model": self.model.currentData(),
+            "model": "auto",
             "crf": 17,
             "encoder": "auto",
             "keep": False,

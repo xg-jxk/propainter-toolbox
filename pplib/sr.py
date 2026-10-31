@@ -30,96 +30,12 @@ def check_cugan():
 
 
 # Real-CUGAN 用「倍率 + 降噪档」决定模型文件名：up4x-denoise3x.param
-_DENOISE_FILE = {-1: "no-denoise", 0: "conservative",
-                 1: "denoise1x", 2: "denoise2x", 3: "denoise3x"}
-_DENOISE_CODE = {v: k for k, v in _DENOISE_FILE.items()}
-
-
-def scan_models(root):
-    """扫描模型目录，返回 {模型名: {(倍率, 降噪档), ...}}。"""
-    found = {}
-    try:
-        names = sorted(os.listdir(root))
-    except OSError:
-        return found
-    for name in names:
-        d = os.path.join(root, name)
-        if not os.path.isdir(d):
-            continue
-        combos = set()
-        try:
-            files = os.listdir(d)
-        except OSError:
-            continue
-        for f in files:
-            if not f.endswith(".param"):
-                continue
-            stem = f[:-len(".param")]              # up4x-denoise3x
-            if not stem.startswith("up") or "x-" not in stem:
-                continue
-            try:
-                scale = int(stem[2:stem.index("x-")])
-            except ValueError:
-                continue
-            code = stem[stem.index("x-") + 2:]
-            if code in _DENOISE_CODE:
-                combos.add((scale, _DENOISE_CODE[code]))
-        if combos:
-            found[name] = combos
-    return found
-
-
-def resolve_model(available, wanted, scale, denoise, emit=None):
-    """挑一个真实存在的 (模型, 倍率, 降噪) 组合。
-
-    优先级：指定模型精确匹配 → 指定模型同倍率最近降噪 → 其它模型精确匹配 → 其它模型最近降噪。
-    上游 models-pro 本来就没有 4x，所以 4x 会自动落到 models-se。
-    """
-    wanted_combos = available.get(wanted, set())
-    scale_list = sorted({sc for combos in available.values() for (sc, _) in combos})
-
-    if (scale, denoise) in wanted_combos:
-        return wanted, scale, denoise
-
-    same_scale = sorted(dn for (sc, dn) in wanted_combos if sc == scale)
-    if same_scale:
-        nearest = min(same_scale, key=lambda dn: (abs(dn - denoise), dn))
-        if emit:
-            emit.log("模型 %s 的 %dx 没有降噪=%d，自动改用降噪=%d（%s）"
-                     % (wanted, scale, denoise, nearest, _DENOISE_FILE[nearest]))
-        return wanted, scale, nearest
-
-    for name, combos in available.items():
-        if name == wanted:
-            continue
-        if (scale, denoise) in combos:
-            if emit:
-                emit.log("模型 %s 没有 %dx，自动改用 %s" % (wanted, scale, name))
-            return name, scale, denoise
-
-    for name, combos in available.items():
-        if name == wanted:
-            continue
-        same = sorted(dn for (sc, dn) in combos if sc == scale)
-        if same:
-            nearest = min(same, key=lambda dn: (abs(dn - denoise), dn))
-            if emit:
-                emit.log("模型 %s 没有 %dx，自动改用 %s（降噪=%d）"
-                         % (wanted, scale, name, nearest))
-            return name, scale, nearest
-
-    raise JobError(
-        "Real-CUGAN 没有 %dx 模型可用" % scale,
-        "可用的倍率：%s；换个倍率，或重新运行 setup.cmd 下载完整模型"
-        % ("/".join(str(s) for s in scale_list) if scale_list else "无"))
-
+from .cugan_models import (_DENOISE_CODE, _DENOISE_FILE, auto_model,  # noqa: F401
+                           resolve_model, scan_models)
 
 
 def clamp_scale(width, height, scale, limit=DEFAULT_MAX_OUTPUT_LONG):
-    """按 8K 上限收紧倍率。返回 (实际倍率, 是否被收紧)。
-
-    limit 默认 MAX_OUTPUT_LONG（长边 7680）；源本身已超限时返回 (0, True)。
-    """
+    """按输出上限收紧倍率。返回 (实际倍率, 是否被收紧)；源本身超限返回 (0, True)。"""
     limit = DEFAULT_MAX_OUTPUT_LONG if limit is None else int(limit)
     if limit <= 0:
         return int(scale), False
@@ -193,8 +109,13 @@ def run_sr(video, opts, emit, out=None, final=True):
         if denoise is None:
             denoise = 3 if h < 720 else 0
         # 按真实存在的文件挑组合，避免 ncnn 因 _wfopen 失败直接崩（0xC0000409）
-        model_name, scale_used, denoise_used = resolve_model(
-            available, opts.model, int(scale_use), int(denoise), emit)
+        wanted = str(getattr(opts, "model", "auto") or "auto")
+        if wanted == "auto" or wanted not in available:
+            model_name, scale_used, denoise_used = auto_model(
+                available, int(scale_use), int(denoise), emit)
+        else:
+            model_name, scale_used, denoise_used = resolve_model(
+                available, wanted, int(scale_use), int(denoise), emit)
         denoise = denoise_used
         emit.log("%d 帧 · 高 %d · 模型 %s · %dx · 降噪 %d（%s）"
                  % (n, h, model_name, scale_used, denoise,

@@ -131,7 +131,6 @@ class AppSmokeTest(unittest.TestCase):
     def test_advanced_collapsed_by_default(self):
         win = self._win()
         self.assertFalse(win.repair_panel.advanced.is_expanded())
-        self.assertFalse(win.sr_panel.advanced.is_expanded())
         self.assertFalse(win.advanced_visible() if hasattr(win, "advanced_visible") else False)
         win.close()
 
@@ -521,6 +520,27 @@ class AppSmokeTest(unittest.TestCase):
         self.assertTrue(win.open_when_done.isChecked())
         self.assertEqual(win._current_preset(), "balanced")
         self.assertEqual(len(win.queue), 1)      # 队列不清空
+        win.close()
+
+
+    def test_auto_model_choice(self):
+        """内置选型：pro 优先；缺档换 se（4x、2x 的降噪 1/2 只有 se 有）。"""
+        from pplib.cugan_models import auto_model
+        avail = {
+            "models-pro": {(2, -1), (2, 0), (2, 3), (3, -1), (3, 0), (3, 3)},
+            "models-se": {(2, -1), (2, 0), (2, 1), (2, 2), (2, 3),
+                          (3, -1), (3, 0), (3, 3), (4, -1), (4, 0), (4, 3)},
+        }
+        self.assertEqual(auto_model(avail, 2, 3)[0], "models-pro")
+        self.assertEqual(auto_model(avail, 4, 3)[0], "models-se")
+        self.assertEqual(auto_model(avail, 2, 1)[0], "models-se")
+        self.assertEqual(auto_model(avail, 3, 1)[0], "models-pro")   # 就近 conservative
+
+    def test_sr_panel_has_no_model_selector(self):
+        win = self._win()
+        self.assertFalse(hasattr(win.sr_panel, "model"))
+        self.assertFalse(hasattr(win.sr_panel, "advanced"))
+        self.assertEqual(win.sr_panel.options(1920, 1080)["model"], "auto")
         win.close()
 
 

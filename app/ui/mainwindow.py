@@ -424,9 +424,6 @@ class MainWindow(QMainWindow):
             idx = self.sr_panel.denoise.findData(c.get("denoise", "auto"))
         if idx >= 0:
             self.sr_panel.denoise.setCurrentIndex(idx)
-        idx = self.sr_panel.model.findData(c.get("model", "models-pro"))
-        if idx >= 0:
-            self.sr_panel.model.setCurrentIndex(idx)
         self.output_panel.out_dir.setText(c.get("out_dir", ""))
         self.output_panel.test_mode.setChecked(bool(c.get("test_mode", False)))
         self.output_panel.test_seconds.setValue(int(c.get("test_seconds", 3)))
@@ -462,7 +459,7 @@ class MainWindow(QMainWindow):
                 self.queue[0].width if len(self.queue) else 0,
                 self.queue[0].height if len(self.queue) else 0)["scale"],
             "denoise": str(self.sr_panel.denoise.currentData()),
-            "model": self.sr_panel.model.currentData(),
+            "model": "auto",
             "out_dir": self.output_panel.out_dir_text(),
             "test_mode": self.output_panel.test_mode.isChecked(),
             "test_seconds": self.output_panel.test_seconds.value(),
@@ -812,9 +809,6 @@ class MainWindow(QMainWindow):
         idx = self.sr_panel.denoise.findData(str(d["denoise"]))
         if idx >= 0:
             self.sr_panel.denoise.setCurrentIndex(idx)
-        idx = self.sr_panel.model.findData(str(d["model"]))
-        if idx >= 0:
-            self.sr_panel.model.setCurrentIndex(idx)
         self.output_panel.out_dir.setText(d["out_dir"])
         self.output_panel.crf.setValue(int(d["crf"]))
         idx = self.output_panel.encoder.findData(str(d["encoder"]))

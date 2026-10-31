@@ -99,7 +99,7 @@ class SROptions:
         return cls(
             scale=int(_get(d, "scale", 2)),
             denoise=(None if den in (None, "") else int(den)),
-            model=str(_get(d, "model", "models-pro")),
+            model=str(_get(d, "model", "auto")),
             max_output_long=int(_get(d, "max_output_long", 7680)),
             crf=int(_get(d, "crf", 17)),
             encoder=str(_get(d, "encoder", "auto")),
