@@ -6,7 +6,7 @@ import tempfile
 import time
 from dataclasses import replace
 
-from .const import MAX_QUEUE, VIDEO_EXTS, normalize_inputs  # noqa: F401  (对外兼容)
+from .const import temp_root, MAX_QUEUE, VIDEO_EXTS, normalize_inputs  # noqa: F401  (对外兼容)
 from .events import JobError, ScaledEmitter
 from .options import JobSpec, RepairOptions, SROptions, default_out
 from .repair import run_repair
@@ -104,7 +104,7 @@ def _run_preview(spec, emit):
     emit.log("测试模式：只处理 %.1fs ~ %.1fs（共 %.1fs），输出到源目录、加 _预览 后缀"
              % (start, start + seconds, seconds))
     out = spec.out or default_out(spec.video, spec.mode, spec.sr.scale, preview=True)
-    tmpdir = tempfile.mkdtemp(prefix="ppclip_")
+    tmpdir = tempfile.mkdtemp(prefix="ppclip_", dir=temp_root())
     clip = os.path.join(tmpdir, "clip.mp4")
     try:
         cut_clip(spec.video, clip, start, seconds, emit=emit)
@@ -129,7 +129,7 @@ def _run_preview(spec, emit):
 
 def _run_pipeline(spec, emit, final=True):
     t0 = time.time()
-    jobdir = tempfile.mkdtemp(prefix="ppline_")
+    jobdir = tempfile.mkdtemp(prefix="ppline_", dir=temp_root())
     clean = os.path.join(jobdir, "clean.mp4")
     keep = bool(spec.repair.keep or spec.sr.keep)
     try:

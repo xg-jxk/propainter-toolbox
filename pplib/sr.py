@@ -10,7 +10,7 @@ import time
 import cv2
 
 from .events import Cancelled, JobError
-from .const import DEFAULT_MAX_OUTPUT_LONG
+from .const import temp_root, DEFAULT_MAX_OUTPUT_LONG
 from .ffmpeg import (CUGAN_DIR, CUGAN_EXE, dir_size, encode_frames,
                      ensure_out_writable, extract_frames, human_size, probe,
                      run_stream)
@@ -77,7 +77,7 @@ def run_sr(video, opts, emit, out=None, final=True):
     ensure_out_writable(out)
 
     t0 = time.time()
-    job = tempfile.mkdtemp(prefix="ppsr_")
+    job = tempfile.mkdtemp(prefix="ppsr_", dir=temp_root())
     fdir, udir = os.path.join(job, "in"), os.path.join(job, "up")
     os.makedirs(fdir, exist_ok=True)
     os.makedirs(udir, exist_ok=True)

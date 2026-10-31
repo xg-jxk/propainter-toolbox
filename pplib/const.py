@@ -38,3 +38,23 @@ MAX_OUTPUT_LONG = 7680
 DEFAULT_MAX_OUTPUT_LONG = MAX_OUTPUT_LONG
 #: 可选的上限档位（长边）：4K / 8K / 16K / 不限制
 OUTPUT_LIMITS = [("4K", 3840), ("8K", 7680), ("16K", 15360), ("不限制", 0)]
+
+
+def app_data_dir():
+    """配置/日志/临时文件的统一根目录。"""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "ProPainterToolbox")
+
+
+def temp_root():
+    """所有处理中间文件都放这里，只这一个目录需要加杀软排除。
+
+    可用 PPTOOLBOX_TEMP 覆盖（安装版不想写用户目录时用）。
+    """
+    path = os.environ.get("PPTOOLBOX_TEMP") or os.path.join(app_data_dir(), "temp")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        import tempfile as _tf
+        path = _tf.gettempdir()
+    return path

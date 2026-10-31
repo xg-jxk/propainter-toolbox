@@ -29,9 +29,30 @@ def _dir_size(path):
     return total
 
 
+def _roots(root=None):
+    if root:
+        return [root]
+    roots = []
+    try:
+        from .const import temp_root
+        roots.append(temp_root())
+    except Exception:
+        pass
+    sys_tmp = tempfile.gettempdir()
+    if sys_tmp not in roots:
+        roots.append(sys_tmp)
+    return roots
+
+
 def scan(root=None):
     """列出可以清理的残留：[(path, size, mtime)]。"""
-    root = root or tempfile.gettempdir()
+    found = []
+    for root in _roots(root):
+        found.extend(_scan_one(root))
+    return found
+
+
+def _scan_one(root):
     found = []
     try:
         names = os.listdir(root)

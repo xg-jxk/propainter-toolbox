@@ -8,6 +8,8 @@ import subprocess
 from . import winproc
 import sys
 import tempfile
+
+from .const import temp_root
 import time
 from pathlib import Path
 
@@ -146,7 +148,8 @@ def _stderr_tail(path, limit=3000):
 
 def run(cmd, cwd=None, env=None, emit=None, label=None):
     """跑一个短命令；失败时抛 JobError（带 stderr 尾巴）。"""
-    tmp = tempfile.NamedTemporaryFile(prefix="ppcmd_", suffix=".log", delete=False)
+    tmp = tempfile.NamedTemporaryFile(prefix="ppcmd_", suffix=".log", delete=False,
+                                          dir=temp_root())
     tmp.close()
     try:
         with open(tmp.name, "wb") as err:
@@ -171,7 +174,8 @@ def run_stream(cmd, on_line=None, cwd=None, env=None, emit=None, label=None):
 
     取消时抛 Cancelled，并在 finally 里 kill 子进程（含其子进程树）。
     """
-    tmp = tempfile.NamedTemporaryFile(prefix="ppcmd_", suffix=".log", delete=False)
+    tmp = tempfile.NamedTemporaryFile(prefix="ppcmd_", suffix=".log", delete=False,
+                                          dir=temp_root())
     tmp.close()
     p = None
     try:

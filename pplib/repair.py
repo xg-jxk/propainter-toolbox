@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 
 from . import detect as D
-from .const import WEIGHT_FILES
+from .const import temp_root, WEIGHT_FILES
 from .events import Cancelled, JobError
 from .ffmpeg import (INFERENCE, ROOT, WEIGHTS, dir_size, encode_frames,
                      ensure_out_writable, extract_frames, find_ffmpeg,
@@ -231,7 +231,7 @@ def run_repair(video, opts, emit, out=None, final=True):
     os.makedirs(str(ROOT), exist_ok=True)
 
     t0 = time.time()
-    job = tempfile.mkdtemp(prefix="ppwm_")
+    job = tempfile.mkdtemp(prefix="ppwm_", dir=temp_root())
     frames_dir = os.path.join(job, "frames")
     final_dir = os.path.join(job, "final")
     os.makedirs(frames_dir, exist_ok=True)
