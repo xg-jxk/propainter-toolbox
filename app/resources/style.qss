@@ -296,3 +296,20 @@ QLabel#hintLabel {
     color: #6b7488;
     font-size: 12px;
 }
+
+/* ---- 统一字段：label / 控件 / 简介 ---- */
+QLabel#fieldLabel {
+    font-size: 13px;
+    font-weight: 500;
+    color: #3d4a63;
+}
+
+QLabel#fieldHint {
+    font-size: 12px;
+    color: #7b8496;
+}
+
+QFrame#cardSep {
+    background: #e8edf7;
+    border: none;
+}

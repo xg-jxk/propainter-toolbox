@@ -383,7 +383,7 @@ class AppSmokeTest(unittest.TestCase):
         texts = [win.sr_panel.target.itemText(i) for i in range(win.sr_panel.target.count())]
         self.assertIn("2560×1440", texts[1])
         self.assertIn("3840×2160", texts[2])
-        self.assertIn("模型上限", texts[3])
+        self.assertIn("⚠", texts[3])          # 被上限截住的档位加警示
         self.assertFalse(win.sr_panel.target.model().item(0).isEnabled())
         win.sr_panel.set_target("4K")
         self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 3)

@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("ProPainter 工具箱 v%s" % __version__)
         win_cfg = self.cfg.get("window", {})
-        self.resize(int(win_cfg.get("w", 1360)), int(win_cfg.get("h", 860)))
+        self.resize(int(win_cfg.get("w", 1400)), int(win_cfg.get("h", 880)))
         self.setMinimumSize(900, 640)
 
         self._build_ui()
@@ -248,13 +248,14 @@ class MainWindow(QMainWindow):
 
         right.setWidget(inner)
         self._right_scroll = right
-        self._relayout_settings(True)
+        self._relayout_settings(3)
 
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 5)
-        splitter.setSizes([600, 720])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([440, 900])
+        left.setMinimumWidth(340)
         root.addWidget(splitter, 1)
 
         # ---------- 进度与操作
@@ -289,7 +290,7 @@ class MainWindow(QMainWindow):
         self.log.setObjectName("log")
         self.log.setPlaceholderText("运行日志会显示在这里")
         self.log.setMinimumHeight(120)
-        self.log_box.grid.addWidget(self.log, 0, 0)
+        self.log_box.vbox.addWidget(self.log)
         root.addWidget(self.log_box)
 
     def _connect(self):
@@ -329,49 +330,70 @@ class MainWindow(QMainWindow):
         self.runner.finished.connect(self._on_finished)
 
     # ================================================================ 布局
-    def _relayout_settings(self, two_columns):
-        """把设置区摆成双列或单列（窗口窄时回退）。"""
-        if getattr(self, "_two_cols", None) == two_columns:
+    def _relayout_settings(self, columns):
+        """把设置区摆成 1 / 2 / 3 列（窗口变窄自动降列）。"""
+        if getattr(self, "_columns", None) == columns:
             return
-        self._two_cols = two_columns
+        self._columns = columns
         grid = self._settings_grid
         while grid.count():
             item = grid.takeAt(0)
             if item.widget() is not None:
                 item.widget().setParent(self._right_scroll.widget())
-        for col in (0, 1):
+        for col in range(3):
             grid.setColumnStretch(col, 0)
-        for row in range(4):
+        for row in range(8):
             grid.setRowStretch(row, 0)
 
-        grid.addWidget(self.preset_bar, 0, 0, 1, 2)
-        if two_columns:
-            # 上排：修复 | 超分（两张窄卡并排）；输出卡片本身较宽，横跨两列
+        grid.addWidget(self.preset_bar, 0, 0, 1, columns)
+        if columns >= 3:
+            grid.addWidget(self.repair_panel, 1, 0)
+            grid.addWidget(self.sr_panel, 1, 1)
+            grid.addWidget(self.output_panel, 1, 2)
+            grid.addWidget(self.options_row, 2, 0, 1, 3)
+            grid.setRowStretch(3, 1)
+        elif columns == 2:
             grid.addWidget(self.repair_panel, 1, 0)
             grid.addWidget(self.sr_panel, 1, 1)
             grid.addWidget(self.output_panel, 2, 0, 1, 2)
             grid.addWidget(self.options_row, 3, 0, 1, 2)
-            grid.setColumnStretch(0, 1)
-            grid.setColumnStretch(1, 1)
             grid.setRowStretch(4, 1)
-            grid.setRowStretch(3, 0)
         else:
-            grid.addWidget(self.repair_panel, 1, 0, 1, 2)
-            grid.addWidget(self.sr_panel, 2, 0, 1, 2)
-            grid.addWidget(self.output_panel, 3, 0, 1, 2)
-            grid.addWidget(self.options_row, 4, 0, 1, 2)
-            grid.setColumnStretch(0, 1)
+            grid.addWidget(self.repair_panel, 1, 0, 1, 1)
+            grid.addWidget(self.sr_panel, 2, 0, 1, 1)
+            grid.addWidget(self.output_panel, 3, 0, 1, 1)
+            grid.addWidget(self.options_row, 4, 0, 1, 1)
             grid.setRowStretch(5, 1)
+        for col in range(max(columns, 1)):
+            grid.setColumnStretch(col, 1)
         for w in (self.preset_bar, self.repair_panel, self.sr_panel,
                   self.output_panel, self.options_row):
             w.show()
+
+    def _apply_queue_columns(self, compact):
+        """队列窄的时候隐藏次要列（详情留在 tooltip / 日志里）。"""
+        if getattr(self, "_queue_compact", None) == compact:
+            return
+        self._queue_compact = compact
+        for col in (COL_ELAPSED, COL_SIZE, COL_OUT):
+            self.table.setColumnHidden(col, compact)
 
     def _maybe_relayout(self):
         try:
             width = self._right_scroll.viewport().width()
         except Exception:
             return
-        self._relayout_settings(width >= 700)
+        if width >= 880:
+            columns = 3
+        elif width >= 620:
+            columns = 2
+        else:
+            columns = 1
+        self._relayout_settings(columns)
+        try:
+            self._apply_queue_columns(self.table.viewport().width() < 560)
+        except Exception:
+            pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -684,6 +706,8 @@ class MainWindow(QMainWindow):
                 size_txt += "（封顶）"
         else:
             size_txt = "?"
+        self.table.item(row, COL_STATUS).setToolTip(
+            "状态：%s｜用时 %.0fs" % (item.status, item.elapsed or 0))
         size_cell = QTableWidgetItem(size_txt)
         size_cell.setToolTip("按目标 %s 计算：%dx" % (self.sr_panel.target_key(), scale))
         self.table.setItem(row, COL_SIZE, size_cell)

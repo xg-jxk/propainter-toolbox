@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""界面基础控件：分段选择、可折叠区、带启用开关的卡片。"""
+"""界面基础控件：分段选择、可折叠区、带启用开关的卡片、统一字段。"""
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QGraphicsOpacityEffect,
-                               QGridLayout, QHBoxLayout, QRadioButton, QToolButton,
+                               QHBoxLayout, QLabel, QRadioButton, QToolButton,
                                QVBoxLayout, QWidget)
 
 from .help import info_icon
 
 
 class SegmentedControl(QWidget):
-    """一排互斥的胶囊按钮（倍率、画质、定位方式都用它）。"""
+    """一排互斥的胶囊按钮（画质等用）。"""
 
     changed = Signal(object)
 
@@ -52,6 +52,41 @@ class SegmentedControl(QWidget):
         self._current = data
 
 
+class Field(QWidget):
+    """统一字段：label + 「i」 / 控件 / 一句简介。"""
+
+    def __init__(self, key, label, control, hint="", parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(4)
+        self.label = QLabel(label)
+        self.label.setObjectName("fieldLabel")
+        head.addWidget(self.label)
+        if key:
+            head.addWidget(info_icon(key))
+        head.addStretch(1)
+        lay.addLayout(head)
+
+        try:
+            control.setMinimumHeight(30)
+        except Exception:
+            pass
+        self.control = control
+        lay.addWidget(control)
+
+        self.hint = hint or ""
+        if self.hint:
+            lb = QLabel(self.hint)
+            lb.setObjectName("fieldHint")
+            lb.setWordWrap(True)
+            lay.addWidget(lb)
+
+
 class Collapsible(QWidget):
     """「▸ 高级」折叠区，默认收起。"""
 
@@ -60,7 +95,7 @@ class Collapsible(QWidget):
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(4)
+        outer.setSpacing(6)
 
         self.btn = QToolButton()
         self.btn.setObjectName("advButton")
@@ -74,12 +109,15 @@ class Collapsible(QWidget):
         outer.addWidget(self.btn)
 
         self.body = QWidget()
-        self.grid = QGridLayout(self.body)
-        self.grid.setContentsMargins(12, 2, 0, 2)
-        self.grid.setHorizontalSpacing(10)
-        self.grid.setVerticalSpacing(6)
+        self.vbox = QVBoxLayout(self.body)
+        self.vbox.setContentsMargins(10, 2, 0, 2)
+        self.vbox.setSpacing(12)
         self.body.setVisible(self._expanded)
         outer.addWidget(self.body)
+
+    def add_field(self, field):
+        self.vbox.addWidget(field)
+        return field
 
     def _on_toggle(self, on):
         self._expanded = bool(on)
@@ -94,7 +132,7 @@ class Collapsible(QWidget):
 
 
 class ModuleCard(QFrame):
-    """带「启用」勾选的卡片：取消勾选时整块变灰不可编辑。"""
+    """带「启用」勾选的卡片：取消勾选时整块变淡。"""
 
     toggled = Signal(bool)
 
@@ -102,8 +140,8 @@ class ModuleCard(QFrame):
         super().__init__(parent)
         self.setObjectName("moduleCard")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 10, 12, 12)
-        outer.setSpacing(8)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(12)
 
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
@@ -119,18 +157,27 @@ class ModuleCard(QFrame):
         outer.addLayout(head)
 
         self.body = QWidget()
-        self.grid = QGridLayout(self.body)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(10)
-        self.grid.setVerticalSpacing(8)
+        self.vbox = QVBoxLayout(self.body)
+        self.vbox.setContentsMargins(0, 0, 0, 0)
+        self.vbox.setSpacing(14)
         outer.addWidget(self.body)
 
-        # 用透明度表示"未启用"，而不是 setEnabled(False)：
-        # 禁用会让子控件收不到鼠标事件，参数旁的「i」就弹不出说明了
         self._effect = QGraphicsOpacityEffect(self.body)
         self._effect.setOpacity(1.0 if checked else 0.45)
         self.body.setGraphicsEffect(self._effect)
         self.check.toggled.connect(self._on_toggle)
+
+    def add_field(self, field):
+        self.vbox.addWidget(field)
+        return field
+
+    def add_separator(self):
+        line = QFrame()
+        line.setObjectName("cardSep")
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFixedHeight(1)
+        self.vbox.addWidget(line)
+        return line
 
     def _on_toggle(self, on):
         self._effect.setOpacity(1.0 if bool(on) else 0.45)

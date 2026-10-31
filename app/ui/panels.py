@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
-"""三块设置面板：区域修复 / 超分 / 输出，以及三档预设。"""
+"""三块设置面板：区域修复 / 超分 / 输出，以及三档预设。
+
+每个配置项统一为「label + i / 控件 / 一句简介」，一项一行。
+"""
 import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
-                               QWidget)
+                               QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from pplib.const import DEFAULT_MAX_OUTPUT_LONG, OUTPUT_LIMITS
 from pplib.options import default_out
 
-from .help import attach, checkbox_with_info, label_with_info
-from .widgets import Collapsible, ModuleCard, SegmentedControl
+from .help import SHORT_HINTS
+from .widgets import Collapsible, Field, ModuleCard, SegmentedControl
 
-#: 三档预设：只动"画质/上下文"这类数值，不动功能开关
 PRESETS = {
     "fast": {
         "title": "快速",
@@ -34,35 +35,11 @@ PRESETS = {
 }
 
 DETECT_OPTIONS = [("自动定位", "auto"), ("手动矩形", "rect"), ("逐帧掩码", "mask")]
-SCALE_OPTIONS = [("2x", 2), ("3x", 3), ("4x", 4)]
 QUALITY_OPTIONS = [("高", 17), ("中", 20), ("低", 23)]
-DENOISE_OPTIONS = [("自动", "auto"), ("-1 不降噪", -1), ("0 保守", 0),
+DENOISE_OPTIONS = [("自动（按分辨率）", "auto"), ("-1 不降噪", -1), ("0 保守", 0),
                    ("1 轻", 1), ("2 中", 2), ("3 强", 3)]
 MODEL_OPTIONS = [("models-pro（推荐）", "models-pro"), ("models-se", "models-se")]
 
-
-
-def _k_label(width, height):
-    """按输出宽给出消费级分辨率叫法。"""
-    if not (width and height):
-        return ""
-    if width >= 15000:
-        return "16K"
-    if width >= 7600:
-        return "8K"
-    if width >= 5000:
-        return "5K"
-    if width >= 3700:
-        return "4K"
-    if width >= 2500:
-        return "2K"
-    if width >= 1880:
-        return "1080p"
-    return "%dp" % int(height)
-
-
-
-#: 分辨率档位：(键, 显示名, 目标长边)。0 表示"最高"，尽可能大
 TARGETS = [("1080p", "1080p", 1920), ("2K", "2K", 2560), ("4K", "4K", 3840),
            ("8K", "8K", 7680), ("max", "最高", 0)]
 SCALES = (2, 3, 4)
@@ -83,12 +60,7 @@ def limit_label(limit):
 
 
 def pick_scale(src_w, src_h, target_long, limit=DEFAULT_MAX_OUTPUT_LONG):
-    """按长边算倍率，并受输出上限约束。返回 (scale, status)。
-
-    status: unknown 无源 / unreachable 源已达目标 / ok 正好 / up 超出目标 /
-            capped 4x 也到不了 / capped_limit 被输出上限截住 / max 最高 /
-            max_limited 最高但受上限限制 / too_big 源已超过上限
-    """
+    """按长边算倍率，并受输出上限约束。返回 (scale, status)。"""
     if not (src_w and src_h):
         return 2, "unknown"
     long_side = max(int(src_w), int(src_h))
@@ -111,6 +83,35 @@ def pick_scale(src_w, src_h, target_long, limit=DEFAULT_MAX_OUTPUT_LONG):
     return s, ("capped" if s == 4 else "capped_limit")
 
 
+def _k_label(width, height):
+    if not (width and height):
+        return ""
+    if width >= 15000:
+        return "16K"
+    if width >= 7600:
+        return "8K"
+    if width >= 5000:
+        return "5K"
+    if width >= 3700:
+        return "4K"
+    if width >= 2500:
+        return "2K"
+    if width >= 1880:
+        return "1080p"
+    return "%dp" % int(height)
+
+
+def _row(*widgets, **kw):
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    stretch_first = kw.get("stretch_first", True)
+    for i, x in enumerate(widgets):
+        lay.addWidget(x, 1 if (stretch_first and i == 0) else 0)
+    return w
+
+
 def _spin(lo, hi, val, suffix=""):
     sp = QSpinBox()
     sp.setRange(lo, hi)
@@ -131,44 +132,42 @@ def _combo(options, current=None):
     return cb
 
 
+def _hint(key, default=""):
+    return SHORT_HINTS.get(key, default)
+
+
 class RepairPanel(ModuleCard):
-    """区域修复：定位方式 + 外扩 + 高级（分段/膨胀/阈值/参考帧）。"""
+    """区域修复：定位方式 / 外扩 / 高级。"""
 
     def __init__(self, parent=None, enabled=True):
-        super().__init__("区域修复（字幕 / 台标 / 杂物 / 角标）", "mode", checked=enabled, parent=parent)
-        g = self.grid
+        super().__init__("区域修复", "mode", checked=enabled, parent=parent)
 
         self.detect = _combo(DETECT_OPTIONS, "auto")
-        g.addWidget(label_with_info("定位方式", "detect"), 0, 0)
-        g.addWidget(attach(self.detect, "detect"), 0, 1)
+        self.add_field(Field("detect", "定位方式", self.detect, _hint("detect")))
 
-        self.stack = QStackedWidget()
-        hint = QLabel("自动在画面四角寻找浅色角标 / 文字，适合大多数情况")
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        self.stack.addWidget(hint)
+        self._detect_extra = QWidget()
+        ex = QVBoxLayout(self._detect_extra)
+        ex.setContentsMargins(0, 0, 0, 0)
+        ex.setSpacing(10)
+
+        self.auto_hint = QLabel("")
+        self.auto_hint.setVisible(False)
+        ex.addWidget(self.auto_hint)
 
         self.rect = QLineEdit()
         self.rect.setPlaceholderText("x,y,w,h   例如 1314,918,320,120")
-        self.stack.addWidget(self.rect)
+        ex.addWidget(self.rect)
 
-        mask_page = QWidget()
-        mrow = QHBoxLayout(mask_page)
-        mrow.setContentsMargins(0, 0, 0, 0)
         self.mask = QLineEdit()
         self.mask.setPlaceholderText("掩码目录，或单张掩码 png")
         self.btn_mask = QPushButton("选择…")
         self.btn_mask.setFixedWidth(64)
-        mrow.addWidget(self.mask, 1)
-        mrow.addWidget(self.btn_mask)
-        self.stack.addWidget(mask_page)
+        self.mask_row = _row(self.mask, self.btn_mask)
+        ex.addWidget(self.mask_row)
+        self.vbox.addWidget(self._detect_extra)
 
-        g.addWidget(self.stack, 1, 0, 1, 4)
+        self.add_separator()
 
-        row = QWidget()
-        rlay = QHBoxLayout(row)
-        rlay.setContentsMargins(0, 0, 0, 0)
-        rlay.setSpacing(8)
         self.padding = QDoubleSpinBox()
         self.padding.setRange(0.0, 1.5)
         self.padding.setSingleStep(0.05)
@@ -178,42 +177,43 @@ class RepairPanel(ModuleCard):
         self.padding_slider = QSlider(Qt.Orientation.Horizontal)
         self.padding_slider.setRange(10, 120)
         self.padding_slider.setValue(45)
-        rlay.addWidget(self.padding_slider, 1)
-        rlay.addWidget(attach(self.padding, "padding"))
-        g.addWidget(label_with_info("外扩 padding", "padding"), 2, 0)
-        g.addWidget(row, 2, 1, 1, 3)
+        self.add_field(Field("padding", "外扩 padding",
+                             _row(self.padding_slider, self.padding),
+                             _hint("padding")))
         self.padding_slider.valueChanged.connect(lambda v: self.padding.setValue(v / 100.0))
         self.padding.valueChanged.connect(
             lambda v: self.padding_slider.setValue(int(round(v * 100))))
 
-        self.advanced = Collapsible("高级：分段 / 掩码膨胀 / 匹配阈值 / 参考帧")
-        adv = self.advanced.grid
+        self.advanced = Collapsible("高级参数")
         self.subvideo = _spin(10, 200, 40, " 帧")
-        adv.addWidget(label_with_info("分段 subvideo", "subvideo"), 0, 0)
-        adv.addWidget(attach(self.subvideo, "subvideo"), 0, 1)
+        self.advanced.add_field(Field("subvideo", "分段 subvideo", self.subvideo,
+                                      _hint("subvideo")))
         self.mask_dilation = _spin(0, 20, 2, " px")
-        adv.addWidget(label_with_info("掩码膨胀", "mask_dilation"), 0, 2)
-        adv.addWidget(attach(self.mask_dilation, "mask_dilation"), 0, 3)
+        self.advanced.add_field(Field("mask_dilation", "掩码膨胀", self.mask_dilation,
+                                      _hint("mask_dilation")))
         self.detect_thr = QDoubleSpinBox()
         self.detect_thr.setRange(0.30, 0.95)
         self.detect_thr.setSingleStep(0.01)
         self.detect_thr.setDecimals(2)
         self.detect_thr.setValue(0.62)
-        adv.addWidget(label_with_info("匹配阈值", "detect_thr"), 1, 0)
-        adv.addWidget(attach(self.detect_thr, "detect_thr"), 1, 1)
+        self.advanced.add_field(Field("detect_thr", "匹配阈值", self.detect_thr,
+                                      _hint("detect_thr")))
         self.ref_stride = _spin(1, 30, 12)
-        adv.addWidget(label_with_info("参考帧步长", "ref_stride"), 1, 2)
-        adv.addWidget(attach(self.ref_stride, "ref_stride"), 1, 3)
-        g.addWidget(self.advanced, 3, 0, 1, 4)
+        self.advanced.add_field(Field("ref_stride", "参考帧步长", self.ref_stride,
+                                      _hint("ref_stride")))
+        self.vbox.addWidget(self.advanced)
+        self.vbox.addStretch(1)
 
         self.detect.currentIndexChanged.connect(self._on_detect_changed)
-        self._on_detect_changed("auto")
+        self._on_detect_changed()
 
     def _on_detect_changed(self, _idx=None):
-        value = self.detect.currentData() or "auto"
-        self.stack.setCurrentIndex({"auto": 0, "rect": 1, "mask": 2}.get(value, 0))
-        self.stack.setEnabled(True)
+        page = self.detect.currentData() or "auto"
+        self._detect_extra.setVisible(page != "auto")   # 自动定位时不需要额外控件
+        self.rect.setVisible(page == "rect")
+        self.mask_row.setVisible(page == "mask")
 
+    # ---------------------------------------------------------- 取值
     def detect_value(self):
         return self.detect.currentData() or "auto"
 
@@ -233,8 +233,8 @@ class RepairPanel(ModuleCard):
             "mask_dilation": self.mask_dilation.value(),
             "neighbor": 10,
             "ref_stride": self.ref_stride.value(),
-            "crf": 17,          # 由 OutputPanel 覆盖
-            "encoder": "auto",  # 由 OutputPanel 覆盖
+            "crf": 17,
+            "encoder": "auto",
             "detect_thr": round(self.detect_thr.value(), 2),
             "keep": False,
         }
@@ -245,13 +245,11 @@ class RepairPanel(ModuleCard):
 
 
 class SRPanel(ModuleCard):
-    """超分：目标分辨率（长边）+ 输出上限 + 降噪 + 模型。"""
+    """超分：目标分辨率 / 降噪 / 高级（输出上限、模型）。"""
 
     def __init__(self, parent=None, enabled=False):
         super().__init__("超分（Real-CUGAN）", "scale", checked=enabled, parent=parent)
-        g = self.grid
 
-        # 先建上限控件：_rebuild 里的文案要用到它
         self.cap = QComboBox()
         for label, value in OUTPUT_LIMITS:
             if not value:
@@ -263,31 +261,28 @@ class SRPanel(ModuleCard):
             self.cap.addItem(text, value)
 
         self.target = QComboBox()
-        self.target.setMinimumWidth(230)
-        g.addWidget(label_with_info("目标分辨率", "scale"), 0, 0)
-        g.addWidget(attach(self.target, "scale"), 0, 1, 1, 3)
+        self.add_field(Field("scale", "目标分辨率", self.target, ""))
         self.scale_hint = QLabel("加入视频后按源长边自动换算倍率")
-        self.scale_hint.setObjectName("hintLabel")
+        self.scale_hint.setObjectName("fieldHint")
         self.scale_hint.setWordWrap(True)
-        g.addWidget(self.scale_hint, 1, 0, 1, 4)
+        self.vbox.addWidget(self.scale_hint)
 
         self._src_w, self._src_h = 0, 0
         self._target_key = "4K"
         self._rebuild()
         self.target.currentIndexChanged.connect(self._on_target_changed)
 
-        self.denoise = _combo(DENOISE_OPTIONS, "auto")
-        g.addWidget(label_with_info("降噪", "denoise"), 2, 0)
-        g.addWidget(attach(self.denoise, "denoise"), 2, 1, 1, 3)
+        self.add_separator()
 
-        self.advanced = Collapsible("高级：输出上限 / 超分模型")
-        adv = self.advanced.grid
-        adv.addWidget(label_with_info("输出上限", "cap"), 0, 0)
-        adv.addWidget(attach(self.cap, "cap"), 0, 1)
+        self.denoise = _combo(DENOISE_OPTIONS, "auto")
+        self.add_field(Field("denoise", "降噪", self.denoise, _hint("denoise")))
+
+        self.advanced = Collapsible("高级参数")
+        self.advanced.add_field(Field("cap", "输出上限", self.cap, _hint("cap")))
         self.model = _combo(MODEL_OPTIONS, "models-pro")
-        adv.addWidget(label_with_info("模型", "model"), 0, 2)
-        adv.addWidget(attach(self.model, "model"), 0, 3)
-        g.addWidget(self.advanced, 3, 0, 1, 4)
+        self.advanced.add_field(Field("model", "模型", self.model, _hint("model")))
+        self.vbox.addWidget(self.advanced)
+        self.vbox.addStretch(1)
         self.cap.currentIndexChanged.connect(lambda _i: self._rebuild())
 
     # ---------------------------------------------------------- 档位
@@ -336,33 +331,20 @@ class SRPanel(ModuleCard):
         self._refresh_hint()
 
     def _item_text(self, key, target_long):
+        """下拉里保持短：细节放在下方提示行。"""
         label = target_label(key)
         if not (self._src_w and self._src_h):
-            if not target_long:
-                return "最高 · 按源自适应"
-            return "%s · 加入视频后显示实际尺寸" % label
+            return label if target_long else "最高 · 按源自适应"
         limit = self.cap_limit()
         scale, status = pick_scale(self._src_w, self._src_h, target_long, limit)
-        cap_name = limit_label(limit) if limit else "不限制"
         if status == "too_big":
-            return "%s · 源已超 %s 上限，无法放大" % (label, cap_name)
+            return "%s · 源超上限" % label
         if status == "unreachable":
-            return "%s · 源长边 %d，最小 2x 已超目标" % (
-                label, max(self._src_w, self._src_h))
+            return "%s · 源已超" % label
         ow, oh = self._src_w * scale, self._src_h * scale
         text = "%s · %dx · %d×%d" % (label, scale, ow, oh)
-        if status == "up":
-            text += "（超出目标）"
-        elif status == "capped":
-            text += "（模型上限）"
-        elif status == "capped_limit":
-            text += "（%s 上限）" % cap_name
-        elif status == "max_limited":
-            text += "（受 %s 上限，非 4x）" % cap_name
-        elif status == "max":
-            text += "（最高）"
-        if max(ow, oh) > 4096:
-            text += "  CPU 编码"
+        if status in ("capped", "capped_limit"):
+            text = "⚠ " + text
         return text
 
     def _rebuild(self):
@@ -391,7 +373,6 @@ class SRPanel(ModuleCard):
         else:
             self._refresh_hint()
 
-    # ---------------------------------------------------------- 提示
     def _refresh_hint(self):
         if not (self._src_w and self._src_h):
             self.scale_hint.setText("加入视频后按源长边自动换算倍率")
@@ -428,7 +409,7 @@ class SRPanel(ModuleCard):
         limit = self.cap_limit()
         scale, status = pick_scale(w, h, self.target_long(), limit)
         if status == "too_big":
-            scale = 0       # 交给上层报错，绝不悄悄按 2x 放大
+            scale = 0
         denoise = self.denoise.currentData()
         return {
             "scale": int(scale or 0),
@@ -445,14 +426,14 @@ class SRPanel(ModuleCard):
 
 
 class OutputPanel(QFrame):
-    """输出：目录、文件名预览、画质、编码器（两个模块共用）。"""
+    """输出：目录 / 画质 / 编码器 / 测试模式（两张卡共用）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("moduleCard")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 12, 14, 14)
-        outer.setSpacing(10)
+        outer.setSpacing(14)
 
         head = QHBoxLayout()
         title = QLabel("输出")
@@ -461,74 +442,61 @@ class OutputPanel(QFrame):
         head.addStretch(1)
         outer.addLayout(head)
 
-        grid = QHBoxLayout()
-        grid.setSpacing(8)
         self.out_dir = QLineEdit()
         self.out_dir.setPlaceholderText("留空 = 与源视频同目录")
         self.btn_outdir = QPushButton("选择…")
         self.btn_outdir.setFixedWidth(64)
-        grid.addWidget(self.out_dir, 1)
-        grid.addWidget(self.btn_outdir)
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(label_with_info("输出目录", "out_dir"))
-        row.addLayout(grid, 1)
-        outer.addLayout(row)
+        outer.addWidget(Field("out_dir", "输出目录",
+                              _row(self.out_dir, self.btn_outdir), ""))
 
         self.preview = QLabel("将输出：—")
-        self.preview.setObjectName("hintLabel")
+        self.preview.setObjectName("fieldHint")
+        self.preview.setWordWrap(True)
         outer.addWidget(self.preview)
 
-        test_row = QHBoxLayout()
-        test_row.setSpacing(8)
-        self.test_mode = QCheckBox("测试模式")
-        test_row.addWidget(checkbox_with_info(self.test_mode, "test_mode"))
-        test_row.addSpacing(6)
-        test_row.addWidget(QLabel("只处理"))
-        self.test_seconds = QSpinBox()
-        self.test_seconds.setRange(1, 60)
-        self.test_seconds.setValue(3)
-        self.test_seconds.setSuffix(" 秒")
+        self.quality = SegmentedControl(QUALITY_OPTIONS, 17)
+        outer.addWidget(Field("crf", "画质", self.quality, _hint("crf")))
+
+        self.encoder = _combo([("自动（有 NVENC 就用）", "auto"),
+                               ("NVIDIA NVENC", "nvenc"), ("CPU x264", "x264")], "auto")
+        outer.addWidget(Field("encoder", "编码器", self.encoder, _hint("encoder")))
+
+        self.test_mode = QCheckBox("只处理一小段")
+        self.test_seconds = _spin(1, 60, 3, " 秒")
         self.test_seconds.setFixedWidth(78)
-        test_row.addWidget(self.test_seconds)
-        test_row.addWidget(QLabel("从第"))
         self.test_start = QDoubleSpinBox()
         self.test_start.setRange(0.0, 3600.0)
         self.test_start.setDecimals(1)
         self.test_start.setSingleStep(0.5)
         self.test_start.setSuffix(" 秒")
         self.test_start.setFixedWidth(88)
-        test_row.addWidget(self.test_start)
-        test_row.addSpacing(4)
-        test_row.addWidget(QLabel("开始"))
-        test_row.addStretch(1)
-        outer.addLayout(test_row)
+        test_box = QWidget()
+        tv = QVBoxLayout(test_box)
+        tv.setContentsMargins(0, 0, 0, 0)
+        tv.setSpacing(6)
+        tv.addWidget(self.test_mode)
+        tv.addWidget(_row(QLabel("时长"), self.test_seconds,
+                          QLabel("起始"), self.test_start,
+                          stretch_first=False))
+        outer.addWidget(Field("test_mode", "测试模式", test_box, _hint("test_mode")))
 
-        self.test_mode.toggled.connect(self._sync_test)
-        self._sync_test(False)
-
-        qrow = QHBoxLayout()
-        qrow.setSpacing(8)
-        self.quality = SegmentedControl(QUALITY_OPTIONS, 17)
-        qrow.addWidget(label_with_info("画质", "crf"))
-        qrow.addWidget(attach(self.quality, "crf"))
-        qrow.addSpacing(12)
-        self.encoder = _combo([("自动（有 NVENC 就用）", "auto"),
-                               ("NVIDIA NVENC", "nvenc"), ("CPU x264", "x264")], "auto")
-        qrow.addWidget(label_with_info("编码器", "encoder"))
-        qrow.addWidget(attach(self.encoder, "encoder"), 1)
-        outer.addLayout(qrow)
-
-        self.advanced = Collapsible("高级：精确 crf")
+        self.advanced = Collapsible("高级参数")
         self.crf = QSpinBox()
         self.crf.setRange(0, 51)
         self.crf.setValue(17)
-        self.advanced.grid.addWidget(QLabel("crf 数值"), 0, 0)
-        self.advanced.grid.addWidget(self.crf, 0, 1)
+        self.advanced.add_field(Field(None, "crf 数值", self.crf,
+                                      "0 最清晰、51 最糊，常用 17~23"))
         outer.addWidget(self.advanced)
+        outer.addStretch(1)
 
         self.quality.changed.connect(self._on_quality)
         self.crf.valueChanged.connect(self._on_crf_changed)
+        self.test_mode.toggled.connect(self._sync_test)
+        self._sync_test(False)
+
+    def _sync_test(self, on):
+        self.test_seconds.setEnabled(bool(on))
+        self.test_start.setEnabled(bool(on))
 
     def _on_quality(self, value):
         if int(self.crf.value()) != int(value):
@@ -539,21 +507,17 @@ class OutputPanel(QFrame):
         if match:
             self.quality.set_value(match[0])
         else:
-            for btn, data in self.quality._buttons:
+            for btn, _data in self.quality._buttons:
                 btn.setChecked(False)
             self.quality._current = value
 
-    def _sync_test(self, on):
-        self.test_seconds.setEnabled(bool(on))
-        self.test_start.setEnabled(bool(on))
-
+    # ---------------------------------------------------------- 取值
     def clip_seconds(self):
         return int(self.test_seconds.value()) if self.test_mode.isChecked() else 0
 
     def clip_start(self):
         return float(self.test_start.value()) if self.test_mode.isChecked() else 0.0
 
-    # ---------------------------------------------------------- 取值
     def out_dir_text(self):
         return self.out_dir.text().strip()
 

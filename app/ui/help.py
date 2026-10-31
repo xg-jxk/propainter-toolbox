@@ -165,3 +165,27 @@ def checkbox_with_info(checkbox, key, parent=None):
     lay.addWidget(info_icon(key))
     lay.addStretch(1)
     return holder
+
+#: 字段下方的一句简介（不超过 20 字，长文见 PARAM_HELP）
+SHORT_HINTS = {
+    "mode": "勾选后这一轮做区域修复",
+    "detect": "四角自动找浅色角标",
+    "rect": "手动画框，最稳",
+    "mask": "逐帧精确指定区域",
+    "padding": "越大上下文越多，残留鬼影可调 0.6",
+    "subvideo": "显存紧就调小，20 帧更省",
+    "mask_dilation": "边缘有毛边就加 2 px",
+    "detect_thr": "越低越容易跟丢 / 误检",
+    "ref_stride": "越大越省显存，颜色可能跳",
+    "scale": "按源尺寸自动换算倍率",
+    "denoise": "越强越干净，细节也越少",
+    "cap": "挡住超过上限的输出",
+    "model": "models-pro 无 4x，会自动换 se",
+    "out_dir": "留空 = 与源视频同目录",
+    "crf": "高=17，中=20，低=23",
+    "encoder": "超 4096 会自动改用 CPU",
+    "test_mode": "只跑一小段，输出 _预览 文件",
+    "keep": "排障用，占磁盘",
+    "open_when_done": "跑完自动打开文件夹",
+    "preset": "一键调好画质与上下文",
+}
