@@ -827,6 +827,7 @@ class MainWindow(QMainWindow):
 
     def clean_temp(self):
         from pplib import cleanup
+        from pplib.const import temp_root
         items = cleanup.scan()
         total = sum(s for _p, s, _m in items)
         if not items:
@@ -834,11 +835,14 @@ class MainWindow(QMainWindow):
             return
         if QMessageBox.question(
                 self, "清理缓存",
-                "发现 %d 个临时残留（%s），通常是取消或崩溃留下的。\n\n"
-                "全部删除？" % (len(items), cleanup.human(total))) != QMessageBox.StandardButton.Yes:
+                "发现 %d 个临时残留（%s），通常在\n%s\n\n全部删除？"
+                % (len(items), cleanup.human(total), temp_root())) != QMessageBox.StandardButton.Yes:
             return
         n, freed = cleanup.sweep(max_age_hours=0)
-        self.append_log("清理临时文件：%d 个，释放 %s" % (n, cleanup.human(freed)))
+        self.append_log("清理临时文件：%d 个，释放 %s（扫描 %s）"
+                        % (n, cleanup.human(freed), temp_root()))
+        if n == 0:
+            self.append_log("⚠ 有 %d 个残留删不掉（可能正被其他程序占用），下次启动会再试" % len(items))
         QMessageBox.information(self, "清理缓存",
                                 "已删除 %d 个残留，释放 %s。" % (n, cleanup.human(freed)))
 

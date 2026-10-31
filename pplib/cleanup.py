@@ -74,8 +74,10 @@ def sweep(max_age_hours=24, root=None):
     """删掉超过 max_age_hours 的残留；max_age_hours<=0 表示全部删。
 
     返回 (删除个数, 释放字节数)。
+
+    注意：root=None 时必须和 scan() 用同一组目录（应用 temp + 系统 temp），
+    否则会出现"弹窗说有 N 个残留，确定后却清理了 0 个"。
     """
-    root = root or tempfile.gettempdir()
     now = time.time()
     limit = max_age_hours * 3600
     count = 0

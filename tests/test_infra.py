@@ -227,5 +227,61 @@ class OomRetryTest(unittest.TestCase):
             repair._run_inference = real
 
 
+class CleanupTest(unittest.TestCase):
+    """清理缓存：scan 找到的东西，sweep 必须删得掉（曾经只扫系统 temp）。"""
+
+    def _fake_residue(self, root):
+        d = os.path.join(root, "ppwm_testdir")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "a.bin"), "wb") as fh:
+            fh.write(b"x" * 4096)
+        stray = os.path.join(root, "ppcmd_test.log")
+        with open(stray, "wb") as fh:
+            fh.write(b"y" * 128)
+        keep = os.path.join(root, "user_file.txt")
+        with open(keep, "wb") as fh:
+            fh.write(b"z")
+        return d, stray, keep
+
+    def test_scan_and_sweep_agree(self):
+        from pplib import cleanup
+        root = tempfile.mkdtemp(prefix="ppcl_")
+        d, stray, keep = self._fake_residue(root)
+        found = cleanup.scan(root)
+        names = {os.path.basename(p) for p, _s, _m in found}
+        self.assertIn("ppwm_testdir", names)
+        self.assertIn("ppcmd_test.log", names)
+        self.assertNotIn("user_file.txt", names)
+
+        n, freed = cleanup.sweep(max_age_hours=0, root=root)
+        self.assertEqual(n, 2)
+        self.assertGreaterEqual(freed, 4096)
+        self.assertFalse(os.path.exists(d))
+        self.assertFalse(os.path.exists(stray))
+        self.assertTrue(os.path.exists(keep), "非本程序的临时文件不能删")
+
+    def test_default_root_matches_scan(self):
+        """root=None 时 sweep 必须和 scan 扫同一组目录（应用 temp + 系统 temp）。"""
+        from pplib import cleanup
+        root = tempfile.mkdtemp(prefix="ppcl2_")
+        d, _stray, _keep = self._fake_residue(root)
+        real = cleanup._roots
+        cleanup._roots = lambda r=None: [r] if r else [root, tempfile.gettempdir()]
+        try:
+            n, _freed = cleanup.sweep(max_age_hours=0)      # 不传 root
+        finally:
+            cleanup._roots = real
+        self.assertGreaterEqual(n, 2, "默认 root 必须覆盖应用 temp 目录")
+        self.assertFalse(os.path.exists(d))
+
+    def test_recent_files_survive_24h_sweep(self):
+        from pplib import cleanup
+        root = tempfile.mkdtemp(prefix="ppcl3_")
+        d, _stray, _keep = self._fake_residue(root)
+        n, _freed = cleanup.sweep(max_age_hours=24, root=root)
+        self.assertEqual(n, 0, "刚写的残留不该被 24h 规则删掉")
+        self.assertTrue(os.path.isdir(d))
+
+
 if __name__ == "__main__":
     unittest.main()
