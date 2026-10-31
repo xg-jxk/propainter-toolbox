@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
 from pplib import __version__
 from pplib.ffmpeg import ROOT
 from pplib.options import default_out
+from pplib.scaling import target_tag
 
 from ..core import applog
 from ..core import config as cfgmod
@@ -28,7 +29,7 @@ from .help import checkbox_with_info, info_icon
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
 from .panels import (PRESETS, OutputPanel, RepairPanel, SRPanel, TestPanel,
-                     pick_scale)
+                     quality_from_crf)
 from .terms_dialog import TermsDialog
 from .widgets import Collapsible
 
@@ -95,6 +96,8 @@ class MainWindow(QMainWindow):
         self._cancel_all = False
         self._t_start = 0.0
         self._last_out = ""
+        self._warned_unknown = set()    # 读不到分辨率的文件已提示过，不重复刷日志
+        self._applying_preset = False    # 应用预设时不要触发"已自定义"
 
         self.setWindowTitle("ProPainter 工具箱 v%s" % __version__)
         win_cfg = self.cfg.get("window", {})
@@ -160,6 +163,27 @@ class MainWindow(QMainWindow):
         self.drop = DropArea()
         lv.addWidget(self.drop)
 
+        # ---- 队列工具条（文件列表的常规位置：列表上方）
+        self.queue_bar = QWidget()
+        qbl = QHBoxLayout(self.queue_bar)
+        qbl.setContentsMargins(0, 0, 0, 0)
+        qbl.setSpacing(6)
+        self.btn_add = QPushButton("添加文件…")
+        self.btn_remove = QPushButton("移除选中")
+        self.btn_clear = QPushButton("清空")
+        for b in (self.btn_add, self.btn_remove, self.btn_clear):
+            b.setFixedHeight(30)
+            qbl.addWidget(b)
+        qbl.addStretch(1)
+        self.queue_label = QLabel("0 / 20")
+        self.queue_label.setObjectName("hintLabel")
+        qbl.addWidget(self.queue_label)
+        self.open_btn = QPushButton("打开输出目录")
+        self.open_btn.setFixedHeight(30)
+        self.open_btn.setToolTip("打开最近一个成品的所在目录")
+        qbl.addWidget(self.open_btn)
+        lv.addWidget(self.queue_bar)
+
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
             ["文件", "状态", "进度", "用时", "输出尺寸", "输出"])
@@ -172,19 +196,6 @@ class MainWindow(QMainWindow):
         for col in (COL_STATUS, COL_PCT, COL_ELAPSED, COL_SIZE, COL_OUT):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         lv.addWidget(self.table, 1)
-
-        qrow = QHBoxLayout()
-        self.btn_add = QPushButton("添加文件…")
-        self.btn_remove = QPushButton("移除选中")
-        self.btn_clear = QPushButton("清空")
-        qrow.addWidget(self.btn_add)
-        qrow.addWidget(self.btn_remove)
-        qrow.addWidget(self.btn_clear)
-        qrow.addStretch(1)
-        self.queue_label = QLabel("0 / 20")
-        self.queue_label.setObjectName("hintLabel")
-        qrow.addWidget(self.queue_label)
-        lv.addLayout(qrow)
 
         right = QScrollArea()
         right.setWidgetResizable(True)
@@ -225,6 +236,12 @@ class MainWindow(QMainWindow):
             self._preset_buttons[key] = btn
             preset_row.addWidget(btn)
         preset_row.addStretch(1)
+        # 「重置参数」属于参数本身，放在档位行最右端（方案 C）
+        self.reset_btn = QPushButton("重置参数")
+        self.reset_btn.setObjectName("ghostButton")
+        self.reset_btn.setFixedHeight(28)
+        self.reset_btn.setToolTip("把所有参数恢复为初始值（不会清空待处理队列）")
+        preset_row.addWidget(self.reset_btn)
         bar_lay.addLayout(preset_row)
 
         self.preset_hint = QLabel(PRESETS["balanced"]["desc"])
@@ -241,59 +258,55 @@ class MainWindow(QMainWindow):
         opts = QHBoxLayout(opts_wrap)
         opts.setContentsMargins(2, 0, 0, 0)
         opts.setSpacing(16)
-        self.keep = QCheckBox("保留中间文件（排障用）")
-        opts.addWidget(checkbox_with_info(self.keep, "keep"))
         self.open_when_done = QCheckBox("完成后自动打开输出目录")
         opts.addWidget(checkbox_with_info(self.open_when_done, "open_when_done"))
         opts.addStretch(1)
         self.options_row = opts_wrap
 
-        self.right_stack = QWidget()
-        rs = QVBoxLayout(self.right_stack)
-        rs.setContentsMargins(0, 0, 0, 0)
-        rs.setSpacing(14)
-        rs.addWidget(self.output_panel, 0)
-        rs.addWidget(self.test_panel, 0)
-        rs.addStretch(0)
-
         right.setWidget(inner)
         self._right_scroll = right
-        self._relayout_settings(3)
+        self._relayout_settings()
 
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([440, 900])
+        splitter.setStretchFactor(0, 1)      # 左右各 50%：参数区不用那么宽
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([704, 704])
         left.setMinimumWidth(340)
+        right.setMinimumWidth(560)          # 再窄参数卡就会出横向滚动条
         root.addWidget(splitter, 1)
 
         # ---------- 进度与操作
-        prow = QHBoxLayout()
-        prow.setSpacing(10)
+        # ---------- 运行状态条：主操作 | 进度 | 状态 | 维护
+        strip = QFrame()
+        strip.setObjectName("statusStrip")
+        self.status_strip = strip
+        sl = QHBoxLayout(strip)
+        sl.setContentsMargins(12, 8, 12, 8)
+        sl.setSpacing(10)
         self.start_btn = QPushButton("开始处理")
         self.start_btn.setObjectName("primary")
-        self.start_btn.setMinimumWidth(120)
+        self.start_btn.setMinimumWidth(132)
+        self.start_btn.setFixedHeight(38)
         self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setFixedHeight(38)
         self.cancel_btn.setEnabled(False)
-        self.open_btn = QPushButton("打开输出目录")
-        self.reset_btn = QPushButton("重置参数")
-        self.reset_btn.setToolTip("把所有参数恢复为初始值（不会清空待处理队列）")
         self.clean_btn = QPushButton("清理缓存")
+        self.clean_btn.setFixedHeight(28)
         self.clean_btn.setToolTip("删除处理过程中异常退出留下的临时文件")
-        prow.addWidget(self.start_btn)
-        prow.addWidget(self.cancel_btn)
-        prow.addWidget(self.open_btn)
-        prow.addWidget(self.reset_btn)
-        prow.addWidget(self.clean_btn)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        prow.addWidget(self.progress, 1)
+        self.progress.setFixedHeight(20)
+        self.progress.setFormat("")
         self.status_label = QLabel("就绪")
         self.status_label.setObjectName("hintLabel")
-        self.status_label.setMinimumWidth(170)
-        prow.addWidget(self.status_label)
-        root.addLayout(prow)
+        self.status_label.setMinimumWidth(220)
+        sl.addWidget(self.start_btn)
+        sl.addWidget(self.cancel_btn)
+        sl.addWidget(self.progress, 1)
+        sl.addWidget(self.status_label)
+        sl.addWidget(self.clean_btn)
+        root.addWidget(strip)
 
         # ---------- 日志（可折叠，出错自动展开）
         self.log_box = Collapsible("运行日志", expanded=False)
@@ -332,10 +345,13 @@ class MainWindow(QMainWindow):
         self.repair_panel.rect.textChanged.connect(self._update_preview)
         self.sr_panel.target.currentIndexChanged.connect(self._update_preview)
         self.output_panel.out_dir.textChanged.connect(self._update_preview)
-        self.output_panel.crf.valueChanged.connect(self._update_preview)
         self.test_panel.test_mode.toggled.connect(self._update_preview)
         self.test_panel.test_seconds.valueChanged.connect(self._update_preview)
         self.test_panel.test_start.valueChanged.connect(self._update_preview)
+
+        # 手改"预设管的东西"→ 档位变自定义
+        self.repair_panel.padding.valueChanged.connect(self._mark_custom)
+        self.output_panel.quality.changed.connect(self._mark_custom)
 
         self.runner.started.connect(self._on_runner_started)
         self.runner.logLine.connect(self.append_log)
@@ -344,29 +360,37 @@ class MainWindow(QMainWindow):
         self.runner.finished.connect(self._on_finished)
 
     # ================================================================ 布局
-    def _relayout_settings(self, columns=3):
-        """固定三列布局（不再随窗口宽度变化）。"""
-        if getattr(self, "_columns", None) == columns:
+    def _relayout_settings(self):
+        """固定两列：修复 | 超分，输出 | 测试模式。
+
+        参数精简到 8 个以后三列会空掉一整块，一列又放不下（1440×900 也要滚动、
+        测试模式掉到折叠线以下）。两列在 1180×720 下也不需要滚动，实测见文档。
+        """
+        if getattr(self, "_columns", None) == 2:
             return
-        self._columns = columns
+        self._columns = 2
         grid = self._settings_grid
         while grid.count():
             item = grid.takeAt(0)
             if item.widget() is not None:
                 item.widget().setParent(self._right_scroll.widget())
         for col in range(3):
-            grid.setColumnStretch(col, 1)
+            grid.setColumnStretch(col, 0)
         for row in range(8):
             grid.setRowStretch(row, 0)
 
-        grid.addWidget(self.preset_bar, 0, 0, 1, 3)
-        grid.addWidget(self.repair_panel, 1, 0)
-        grid.addWidget(self.sr_panel, 1, 1)
-        grid.addWidget(self.right_stack, 1, 2)
-        grid.addWidget(self.options_row, 2, 0, 1, 3)
-        grid.setRowStretch(3, 1)
+        top = Qt.AlignmentFlag.AlignTop
+        grid.addWidget(self.preset_bar, 0, 0, 1, 2)
+        grid.addWidget(self.repair_panel, 1, 0, top)
+        grid.addWidget(self.sr_panel, 1, 1, top)
+        grid.addWidget(self.output_panel, 2, 0, top)
+        grid.addWidget(self.test_panel, 2, 1, top)
+        grid.addWidget(self.options_row, 3, 0, 1, 2)
+        grid.setRowStretch(4, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         for w in (self.preset_bar, self.repair_panel, self.sr_panel,
-                  self.right_stack, self.options_row):
+                  self.output_panel, self.test_panel, self.options_row):
             w.show()
 
     def _apply_queue_columns(self, compact):
@@ -378,7 +402,7 @@ class MainWindow(QMainWindow):
             self.table.setColumnHidden(col, compact)
 
     def _maybe_relayout(self):
-        self._relayout_settings(3)
+        self._relayout_settings()
         try:
             self._apply_queue_columns(self.table.viewport().width() < 560)
         except Exception:
@@ -402,12 +426,7 @@ class MainWindow(QMainWindow):
         self.repair_panel.rect.setText(c.get("rect", ""))
         self.repair_panel.mask.setText(c.get("mask", ""))
         self.repair_panel.padding.setValue(float(c.get("padding", 0.45)))
-        self.repair_panel.subvideo.setValue(int(c.get("subvideo", 40)))
-        self.repair_panel.mask_dilation.setValue(int(c.get("mask_dilation", 2)))
-        self.repair_panel.detect_thr.setValue(float(c.get("detect_thr", 0.62)))
-        self.repair_panel.ref_stride.setValue(int(c.get("ref_stride", 12)))
-        self.sr_panel.set_target(str(c.get("sr_target", "4K")))
-        self.sr_panel.set_cap(int(c.get("sr_max_output", 7680)))
+        self.sr_panel.set_target(str(c.get("sr_target", "1080p")))
         idx = self.sr_panel.denoise.findData(str(c.get("denoise", "auto")))
         if idx < 0:
             idx = self.sr_panel.denoise.findData(c.get("denoise", "auto"))
@@ -417,16 +436,15 @@ class MainWindow(QMainWindow):
         self.test_panel.test_mode.setChecked(bool(c.get("test_mode", False)))
         self.test_panel.test_seconds.setValue(int(c.get("test_seconds", 3)))
         self.test_panel.test_start.setValue(float(c.get("test_start", 0.0)))
-        self.output_panel.crf.setValue(int(c.get("crf", 17)))
-        idx = self.output_panel.encoder.findData(c.get("encoder", "auto"))
-        if idx >= 0:
-            self.output_panel.encoder.setCurrentIndex(idx)
-        self.keep.setChecked(bool(c.get("keep", False)))
+        self.output_panel.quality.set_value(quality_from_crf(c.get("crf", 17)))
         self.open_when_done.setChecked(bool(c.get("open_when_done", True)))
         preset = str(c.get("preset", "balanced"))
         if preset in self._preset_buttons:
             self._preset_buttons[preset].setChecked(True)
             self.preset_hint.setText(PRESETS[preset]["desc"])
+        elif preset == "":
+            self._preset_buttons_off()
+            self.preset_hint.setText("已自定义：外扩 / 画质等参数按当前设置生效")
         self.log_box.set_expanded(bool(c.get("log_open", False)))
 
     def _collect_config(self):
@@ -437,15 +455,7 @@ class MainWindow(QMainWindow):
             "rect": self.repair_panel.rect.text().strip(),
             "mask": self.repair_panel.mask.text().strip(),
             "padding": round(self.repair_panel.padding.value(), 2),
-            "subvideo": self.repair_panel.subvideo.value(),
-            "mask_dilation": self.repair_panel.mask_dilation.value(),
-            "detect_thr": round(self.repair_panel.detect_thr.value(), 2),
-            "ref_stride": self.repair_panel.ref_stride.value(),
-            "sr_target": self.sr_panel.target_key(),
-            "sr_max_output": self.sr_panel.cap_limit(),
-            "scale": self.sr_panel.options(
-                self.queue[0].width if len(self.queue) else 0,
-                self.queue[0].height if len(self.queue) else 0)["scale"],
+            "sr_target": self.sr_panel.want_key(),
             "denoise": str(self.sr_panel.denoise.currentData()),
             "model": "auto",
             "out_dir": self.output_panel.out_dir_text(),
@@ -453,8 +463,6 @@ class MainWindow(QMainWindow):
             "test_seconds": self.test_panel.test_seconds.value(),
             "test_start": round(self.test_panel.test_start.value(), 1),
             "crf": self.output_panel.crf_value(),
-            "encoder": self.output_panel.encoder_value(),
-            "keep": self.keep.isChecked(),
             "open_when_done": self.open_when_done.isChecked(),
             "preset": self._current_preset(),
             "log_open": self.log_box.is_expanded(),
@@ -495,13 +503,14 @@ class MainWindow(QMainWindow):
     def _update_preview(self, *_):
         video = self.queue[0].path if len(self.queue) else os.path.join("D:\\video", "a.mp4")
         mode = self._mode() or "repair"
-        _src_w = self.queue[0].width if len(self.queue) else 0
-        _src_h = self.queue[0].height if len(self.queue) else 0
-        scale = pick_scale(_src_w, _src_h, self.sr_panel.target_long())[0]
+        src_w = self.queue[0].width if len(self.queue) else 0
+        src_h = self.queue[0].height if len(self.queue) else 0
+        scale = self.sr_panel.plan(src_w, src_h)["scale"] or 2
+        tag = target_tag(self.sr_panel.target_long()) if mode != "repair" else ""
         preview = self.test_panel.test_mode.isChecked()
-        path = self.output_panel.out_path(video, mode, scale, preview=preview)
+        path = self.output_panel.out_path(video, mode, scale, preview=preview, tag=tag)
         if not path:
-            path = default_out(video, mode, scale, preview=preview)
+            path = default_out(video, mode, scale, preview=preview, tag=tag)
         where = os.path.dirname(path)
         name = os.path.basename(path)
         if self.output_panel.out_dir_text():
@@ -516,10 +525,30 @@ class MainWindow(QMainWindow):
         btn = self._preset_buttons.get(key)
         if btn is not None and not btn.isChecked():
             btn.setChecked(True)
-        self.repair_panel.apply_preset(preset)
-        self.output_panel.crf.setValue(int(preset["crf"]))
+        self._applying_preset = True
+        try:
+            self.repair_panel.apply_preset(preset)
+        finally:
+            self._applying_preset = False
         self.preset_hint.setText(preset["desc"])
         self._update_preview()
+
+    def _mark_custom(self, *_args):
+        """手改了预设管的参数：取消档位高亮，提示已自定义。"""
+        if getattr(self, "_applying_preset", False):
+            return
+        for btn in self._preset_buttons.values():
+            if btn.isChecked():
+                self._preset_buttons_off()
+                self.preset_hint.setText("已自定义：外扩 / 画质等参数按当前设置生效")
+                return
+
+    def _preset_buttons_off(self):
+        group = self.preset_group
+        group.setExclusive(False)
+        for btn in self._preset_buttons.values():
+            btn.setChecked(False)
+        group.setExclusive(True)
 
     # ================================================================ 运行时
     def start_env_probe(self):
@@ -609,6 +638,7 @@ class MainWindow(QMainWindow):
         if added:
             self._rebuild_table()
             self.append_log("已加入 %d 个文件" % len(added))
+            self._maybe_tip_test_mode()
         if rejected:
             lines = ["%s（%s）" % (os.path.basename(p), why) for p, why in rejected[:6]]
             if len(rejected) > 6:
@@ -619,17 +649,26 @@ class MainWindow(QMainWindow):
         self._sync_scale_labels()
         self._update_preview()
 
+    def _maybe_tip_test_mode(self):
+        """第一次加文件时提示可以先跑 3 秒预览；只提示一次，不弹窗。"""
+        if self.cfg.get("test_tip_shown"):
+            return
+        self.cfg["test_tip_shown"] = True
+        self.append_log("提示：想先看效果，可以勾「只处理一小段」，3 秒就能出片（日志里有对比）")
+
     def _probe_item(self, item):
         """记录源分辨率，用于把倍率显示成实际输出尺寸。"""
         if item.width and item.height:
             return
         try:
-            from pplib.ffmpeg import probe_size
-            w, h = probe_size(item.path)
-            if w and h:
-                item.width, item.height = w, h
-        except Exception:
-            pass
+            from pplib.ffmpeg import probe_size_ex
+            w, h, why = probe_size_ex(item.path)
+        except Exception as e:      # 探测本身出问题也不能挡住加文件
+            w, h, why = 0, 0, "探测异常：%s" % e
+        if w and h:
+            item.width, item.height, item.probe_error = w, h, ""
+        else:
+            item.probe_error = why or "原因未知"
 
     def _sync_scale_labels(self):
         if len(self.queue):
@@ -682,18 +721,26 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, COL_PCT, QTableWidgetItem("%d%%" % int(item.pct)))
         self.table.setItem(row, COL_ELAPSED,
                            QTableWidgetItem("%.0fs" % item.elapsed if item.elapsed else ""))
-        scale, status = pick_scale(item.width, item.height,
-                                   self.sr_panel.target_long())
+        plan = self.sr_panel.plan(item.width, item.height)
         if item.width and item.height:
-            size_txt = "%d×%d" % (item.width * scale, item.height * scale)
-            if status == "capped":
-                size_txt += "（封顶）"
+            fw, fh = plan["final"]
+            size_txt = "%d×%d" % (fw, fh)
+            if not plan["need_sr"]:
+                size_txt += "（跳过超分）"
         else:
             size_txt = "?"
         self.table.item(row, COL_STATUS).setToolTip(
             "状态：%s｜用时 %.0fs" % (item.status, item.elapsed or 0))
         size_cell = QTableWidgetItem(size_txt)
-        size_cell.setToolTip("按目标 %s 计算：%dx" % (self.sr_panel.target_key(), scale))
+        if item.width and item.height:
+            size_cell.setToolTip(
+                "统一到目标 %s（长边 %d）；%s" % (
+                    self.sr_panel.target_key(), self.sr_panel.target_long(),
+                    "源已达标，只缩小" if not plan["need_sr"]
+                    else "先 %dx 超分再缩放" % plan["scale"]))
+        else:
+            size_cell.setToolTip("读不到分辨率：%s"
+                                 % (item.probe_error or "原因未知"))
         self.table.setItem(row, COL_SIZE, size_cell)
 
         out = QTableWidgetItem(item.out or item.message)
@@ -709,15 +756,17 @@ class MainWindow(QMainWindow):
         sr = self.sr_panel.options(width, height)
         repair["crf"] = self.output_panel.crf_value()
         repair["encoder"] = self.output_panel.encoder_value()
-        repair["keep"] = self.keep.isChecked()
+        repair["keep"] = False          # 中间文件用不上，统一不留（排障走 CLI --keep）
         sr["crf"] = self.output_panel.crf_value()
         sr["encoder"] = self.output_panel.encoder_value()
-        sr["keep"] = self.keep.isChecked()
+        sr["keep"] = False
+        tag = target_tag(sr["target_long"]) if mode != "repair" else ""
         return {
             "mode": mode,
             "video": video,
                         "out": self.output_panel.out_path(video, mode, sr["scale"],
-                                       preview=self.test_panel.test_mode.isChecked()),
+                                       preview=self.test_panel.test_mode.isChecked(),
+                                       tag=tag),
             "intermediate_crf": 12,
             "clip_seconds": self.test_panel.clip_seconds(),
             "clip_start": self.test_panel.clip_start(),
@@ -762,6 +811,7 @@ class MainWindow(QMainWindow):
         self.queue.reset()
         self._rebuild_table()
         self._cancel_all = False
+        self._warned_unknown = set()
         self._t_start = time.time()
         self.cfg.update(self._collect_config())
         cfgmod.save(self.cfg)
@@ -798,24 +848,15 @@ class MainWindow(QMainWindow):
         self.repair_panel.rect.setText(d["rect"])
         self.repair_panel.mask.setText(d["mask"])
         self.repair_panel.padding.setValue(float(d["padding"]))
-        self.repair_panel.subvideo.setValue(int(d["subvideo"]))
-        self.repair_panel.mask_dilation.setValue(int(d["mask_dilation"]))
-        self.repair_panel.detect_thr.setValue(float(d["detect_thr"]))
-        self.repair_panel.ref_stride.setValue(int(d["ref_stride"]))
         self.sr_panel.set_target(str(d["sr_target"]))
-        self.sr_panel.set_cap(int(d["sr_max_output"]))
         idx = self.sr_panel.denoise.findData(str(d["denoise"]))
         if idx >= 0:
             self.sr_panel.denoise.setCurrentIndex(idx)
         self.output_panel.out_dir.setText(d["out_dir"])
-        self.output_panel.crf.setValue(int(d["crf"]))
-        idx = self.output_panel.encoder.findData(str(d["encoder"]))
-        if idx >= 0:
-            self.output_panel.encoder.setCurrentIndex(idx)
+        self.output_panel.quality.set_value(quality_from_crf(d["crf"]))
         self.test_panel.test_mode.setChecked(bool(d["test_mode"]))
         self.test_panel.test_seconds.setValue(int(d["test_seconds"]))
         self.test_panel.test_start.setValue(float(d["test_start"]))
-        self.keep.setChecked(bool(d["keep"]))
         self.open_when_done.setChecked(bool(d["open_when_done"]))
         preset = str(d.get("preset", "balanced"))
         if preset in self._preset_buttons:
@@ -832,22 +873,34 @@ class MainWindow(QMainWindow):
     def _log_target_summary(self):
         if not len(self.queue):
             return
-        buckets = {}
+        target = self.sr_panel.target_long()
+        up = skip = capped = 0
         for it in self.queue:
-            scale, status = pick_scale(it.width, it.height, self.sr_panel.target_long())
-            tag = "%dx" % scale if status != "capped" else "%dx封顶" % scale
-            buckets[tag] = buckets.get(tag, 0) + 1
-        detail = "，".join("%s ×%d" % (k, v) for k, v in sorted(buckets.items()))
-        self.append_log("目标 %s：%s" % (self.sr_panel.target_key(), detail))
-        unknown = [it.name for it in self.queue if not (it.width and it.height)]
+            if not (it.width and it.height):
+                continue
+            p = self.sr_panel.plan(it.width, it.height)
+            if not p["need_sr"]:
+                skip += 1
+            elif p.get("reason"):
+                capped += 1
+            else:
+                up += 1
+        parts = []
+        if up:
+            parts.append("超分 %d" % up)
+        if skip:
+            parts.append("跳过超分（源已达标）%d" % skip)
+        if capped:
+            parts.append("4x 不够、插值补齐 %d" % capped)
+        self.append_log("统一长边 %d（%s）：%s" % (
+            target, self.sr_panel.target_key(), "，".join(parts) or "无"))
+        unknown = [it for it in self.queue if not (it.width and it.height)]
         if unknown:
-            self.append_log("⚠ %d 个文件读不到分辨率，会按固定 2x 处理：%s"
-                            % (len(unknown), "、".join(unknown[:3])))
-        over = [it for it in self.queue if pick_scale(
-            it.width, it.height, self.sr_panel.target_long())[1] == "unreachable"]
-        if over:
-            self.append_log("⚠ 有 %d 个文件的源分辨率已接近/超过目标，最小只能 2x（会超出目标）"
-                            % len(over))
+            why = sorted({it.probe_error for it in unknown if it.probe_error})
+            reason = "（%s）" % why[0] if len(why) == 1 else ""
+            self.append_log("⚠ %d 个文件读不到分辨率%s，会按固定 2x 处理：%s"
+                            % (len(unknown), reason, "、".join(it.name for it in unknown[:3])))
+            self._warned_unknown = {it.name for it in unknown}
 
     def _start_next(self):
         idx = self.queue.next_pending_index()
@@ -860,8 +913,9 @@ class MainWindow(QMainWindow):
             self._probe_item(item)      # 加入时没读到就再试一次
             if item.width and item.height:
                 self._sync_scale_labels()
-            else:
-                self.append_log("⚠ 读不到 %s 的分辨率，本次按固定 2x 处理" % item.name)
+            elif item.name not in self._warned_unknown:
+                self.append_log("⚠ 读不到 %s 的分辨率（%s），本次按固定 2x 处理"
+                                % (item.name, item.probe_error or "原因未知"))
         item.status = STATUS_RUNNING
         self._fill_row(idx, item)
         self.table.selectRow(idx)
@@ -881,7 +935,7 @@ class MainWindow(QMainWindow):
     def _on_stage(self, name, pct):
         self.progress.setValue(int(pct))
         self._set_title_pct(pct)
-        self.status_label.setText("%s · %d%%" % (name, int(pct)))
+        self.status_label.setText(name)
         if self._current is not None:
             item = self.queue[self._current]
             item.pct = pct
@@ -996,11 +1050,13 @@ class MainWindow(QMainWindow):
     def set_running(self, running):
         for w in (self.start_btn, self.btn_add, self.btn_clear, self.btn_remove,
                   self.drop, self.repair_panel, self.sr_panel, self.output_panel,
-                  self.keep, self.open_when_done, self.reset_btn):
+                  self.open_when_done, self.reset_btn, self.clean_btn):
             w.setEnabled(not running)
         for btn in self._preset_buttons.values():
             btn.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
+        # 百分比画在进度条里，状态文字只放"在做什么"
+        self.progress.setFormat("%p%" if running else "")
         if not running:
             self._on_modules_changed()
             self._refresh_queue_label()

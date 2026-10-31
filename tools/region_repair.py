@@ -39,6 +39,8 @@ def build_parser():
                     help="候选宽高比上限，默认 10")
     ap.add_argument("--dry-run", action="store_true", dest="dry_run",
                     help="只检测并出预览图，不处理整片")
+    ap.add_argument("--no-cap", action="store_true", dest="no_cap",
+                    help="不按分辨率封顶码率（默认封顶，防止体积失控）")
     ap.add_argument("--keep", action="store_true", help="保留中间文件")
     ap.add_argument("--log-file", dest="log_file", help="把日志写到文件")
     return ap
@@ -63,6 +65,7 @@ def main(argv=None):
         detect_aspect=a.detect_aspect,
         keep=a.keep,
         dry_run=a.dry_run,
+        cap_size=not a.no_cap,
     )
     emit = cli_emitter(a.log_file)
     emit.log("提示：仅限处理你拥有版权或已获授权的视频（见 TERMS.md）")

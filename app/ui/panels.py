@@ -3,6 +3,7 @@
 
 每个配置项统一为「label + i / 控件 / 一句简介」，一项一行。
 """
+import math
 import os
 
 from PySide6.QtCore import Qt
@@ -10,7 +11,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QSlider, QSpinBox, QVBoxLayout, QWidget)
 
-from pplib.const import DEFAULT_MAX_OUTPUT_LONG, OUTPUT_LIMITS
+from pplib.const import DEFAULT_MAX_OUTPUT_LONG
+from pplib.scaling import final_size, plan_scale
 from pplib.options import default_out
 
 from .help import SHORT_HINTS, info_icon
@@ -19,30 +21,42 @@ from .widgets import Collapsible, Field, ModuleCard, SegmentedControl
 PRESETS = {
     "fast": {
         "title": "快速",
-        "desc": "显存小 / 赶时间：上下文更小、码率更低",
-        "padding": 0.35, "subvideo": 20, "crf": 22,
+        "desc": "显存占用最小、最快：上下文更小，修复还原度略低",
+        "padding": 0.35, "subvideo": 20,
     },
     "balanced": {
         "title": "平衡",
-        "desc": "默认推荐：质量与速度兼顾",
-        "padding": 0.45, "subvideo": 40, "crf": 17,
+        "desc": "默认推荐：速度与修复效果兼顾",
+        "padding": 0.45, "subvideo": 40,
     },
-    "quality": {
-        "title": "高质量",
-        "desc": "更大上下文 + 更高码率，慢一些",
-        "padding": 0.55, "subvideo": 80, "crf": 14,
+    "detail": {
+        "title": "精修",
+        "desc": "上下文更大：修复更稳，但更慢、更吃显存",
+        "padding": 0.55, "subvideo": 80,
     },
 }
 
 DETECT_OPTIONS = [("自动定位", "auto"), ("手动矩形", "rect"), ("逐帧掩码", "mask")]
 QUALITY_OPTIONS = [("高", 17), ("中", 20), ("低", 23)]
-DENOISE_OPTIONS = [("自动（按分辨率）", "auto"), ("-1 不降噪", -1), ("0 保守", 0),
-                   ("1 轻", 1), ("2 中", 2), ("3 强", 3)]
+
+
+def quality_from_crf(value):
+    """把任意 crf（含旧配置里的 14/22）映射到三档之一。"""
+    try:
+        crf = int(value)
+    except (TypeError, ValueError):
+        return 17
+    if crf <= 17:
+        return 17
+    return 20 if crf <= 20 else 23
+
+DENOISE_OPTIONS = [("自动（按分辨率）", "auto"), ("不降噪", -1), ("弱", 1),
+                   ("中", 2), ("强", 3)]
 MODEL_OPTIONS = [("models-pro（推荐）", "models-pro"), ("models-se", "models-se")]
 
+#: 目标档位 = 输出长边（统一尺寸）；没有「最高」档——那与统一尺寸自相矛盾
 TARGETS = [("1080p", "1080p", 1920), ("2K", "2K", 2560), ("4K", "4K", 3840),
-           ("8K", "8K", 7680), ("max", "最高", 0)]
-SCALES = (2, 3, 4)
+           ("8K", "8K", 7680)]
 
 
 def target_label(key):
@@ -50,45 +64,6 @@ def target_label(key):
         if k == key:
             return label
     return key
-
-
-def limit_label(limit):
-    for label, value in OUTPUT_LIMITS:
-        if value == limit:
-            return label
-    return str(limit)
-
-
-def pick_scale(src_w, src_h, target_long, limit=DEFAULT_MAX_OUTPUT_LONG):
-    """按长边算倍率，受输出上限硬约束。返回 (scale, status)。
-
-    status:
-      unknown     还没选视频
-      too_big     源本身已到/超过上限 → 本次跳过超分
-      unavailable 目标需要超过上限的倍率 → 该档不可选（不再降档）
-      unreachable 源已经超过目标
-      ok / up     正好命中 / 整数倍导致超出目标
-      max / max_limited  最高档（前者能用 4x，后者被上限截住）
-    """
-    if not (src_w and src_h):
-        return 2, "unknown"
-    long_side = max(int(src_w), int(src_h))
-    limit = int(limit or 0)
-    allowed = list(SCALES)
-    if limit > 0:
-        allowed = [s for s in SCALES if long_side * s <= limit]
-        if not allowed:
-            return 0, "too_big"
-    if not target_long:
-        s = max(allowed)
-        return s, ("max" if s == 4 else "max_limited")
-    need = float(target_long) / float(long_side)
-    if need < 2 - 1e-6:
-        return 2, "unreachable"
-    for s in allowed:
-        if long_side * s >= target_long - 0.5:
-            return s, ("ok" if abs(long_side * s - target_long) <= 1 else "up")
-    return 0, "unavailable"
 
 
 def _k_label(width, height):
@@ -145,7 +120,11 @@ def _hint(key, default=""):
 
 
 class RepairPanel(ModuleCard):
-    """区域修复：定位方式 / 外扩 / 高级。"""
+    """区域修复：定位方式 / 外扩范围。
+
+    分段、掩码膨胀、匹配阈值、参考帧步长都是算法内部的量，界面上不再暴露：
+    分段跟随档位预设（显存不够时 repair.py 会自动减半重试）。
+    """
 
     def __init__(self, parent=None, enabled=True):
         super().__init__("区域修复", "mode", checked=enabled, parent=parent)
@@ -177,7 +156,7 @@ class RepairPanel(ModuleCard):
         self.add_separator()
 
         self.padding = QDoubleSpinBox()
-        self.padding.setRange(0.0, 1.5)
+        self.padding.setRange(0.10, 1.20)
         self.padding.setSingleStep(0.05)
         self.padding.setDecimals(2)
         self.padding.setValue(0.45)
@@ -185,29 +164,14 @@ class RepairPanel(ModuleCard):
         self.padding_slider = QSlider(Qt.Orientation.Horizontal)
         self.padding_slider.setRange(10, 120)
         self.padding_slider.setValue(45)
-        self.add_field(Field("padding", "外扩 padding",
+        self.add_field(Field("padding", "外扩范围",
                              _row(self.padding_slider, self.padding),
                              _hint("padding")))
         self.padding_slider.valueChanged.connect(lambda v: self.padding.setValue(v / 100.0))
         self.padding.valueChanged.connect(
             lambda v: self.padding_slider.setValue(int(round(v * 100))))
 
-        self.subvideo = _spin(10, 200, 40, " 帧")
-        self.add_field(Field("subvideo", "分段 subvideo", self.subvideo,
-                             _hint("subvideo")))
-        self.mask_dilation = _spin(0, 20, 2, " px")
-        self.add_field(Field("mask_dilation", "掩码膨胀", self.mask_dilation,
-                             _hint("mask_dilation")))
-        self.detect_thr = QDoubleSpinBox()
-        self.detect_thr.setRange(0.30, 0.95)
-        self.detect_thr.setSingleStep(0.01)
-        self.detect_thr.setDecimals(2)
-        self.detect_thr.setValue(0.62)
-        self.add_field(Field("detect_thr", "匹配阈值", self.detect_thr,
-                             _hint("detect_thr")))
-        self.ref_stride = _spin(1, 30, 12)
-        self.add_field(Field("ref_stride", "参考帧步长", self.ref_stride,
-                             _hint("ref_stride")))
+        self._subvideo = 40            # 跟随档位预设，界面上不展示
         self.vbox.addStretch(1)
 
         self.detect.currentIndexChanged.connect(self._on_detect_changed)
@@ -235,53 +199,44 @@ class RepairPanel(ModuleCard):
             "rect": self.rect.text().strip() if detect == "rect" else None,
             "mask": self.mask.text().strip() if detect == "mask" else None,
             "padding": round(self.padding.value(), 2),
-            "subvideo": self.subvideo.value(),
-            "mask_dilation": self.mask_dilation.value(),
+            "subvideo": int(self._subvideo),
+            "mask_dilation": 2,
             "neighbor": 10,
-            "ref_stride": self.ref_stride.value(),
+            "ref_stride": 12,
             "crf": 17,
             "encoder": "auto",
-            "detect_thr": round(self.detect_thr.value(), 2),
+            "detect_thr": 0.62,
             "keep": False,
         }
 
     def apply_preset(self, preset):
         self.padding.setValue(float(preset["padding"]))
-        self.subvideo.setValue(int(preset["subvideo"]))
+        self._subvideo = int(preset["subvideo"])
 
 
 class SRPanel(ModuleCard):
-    """超分：目标分辨率 / 降噪 / 高级（输出上限、模型）。"""
+    """超分：目标分辨率（统一长边）/ 降噪。
+
+    目标档位 = **输出长边**：源小就超分到恰好这个长边，源已经达标就跳过超分只缩小，
+    4x 仍够不到目标时用 4x 结果补齐 —— 批量出片的尺寸始终一致。
+    """
 
     def __init__(self, parent=None, enabled=False):
         super().__init__("超分（Real-CUGAN）", "scale", checked=enabled, parent=parent)
 
-        self.cap = QComboBox()
-        for label, value in OUTPUT_LIMITS:
-            if not value:
-                text = "不限制（按 4x 跑）"
-            elif value == DEFAULT_MAX_OUTPUT_LONG:
-                text = "上限 %s（推荐）" % label
-            else:
-                text = "上限 %s" % label
-            self.cap.addItem(text, value)
-
         self.target = QComboBox()
         self.add_field(Field("scale", "目标分辨率", self.target, ""))
-        self.scale_hint = QLabel("加入视频后按源长边自动换算倍率")
+        self.scale_hint = QLabel("加入视频后按长边自动换算")
         self.scale_hint.setObjectName("fieldHint")
         self.scale_hint.setWordWrap(True)
         self.vbox.addWidget(self.scale_hint)
 
         self._src_w, self._src_h = 0, 0
-        self._target_key = "4K"
+        self._target_key = "1080p"
         self._rebuild()
         self.target.currentIndexChanged.connect(self._on_target_changed)
 
         self.add_separator()
-
-        self.add_field(Field("cap", "输出上限", self.cap, _hint("cap")))
-        self.cap.currentIndexChanged.connect(lambda _i: self._rebuild())
 
         self.denoise = _combo(DENOISE_OPTIONS, "auto")
         self.add_field(Field("denoise", "降噪", self.denoise, _hint("denoise")))
@@ -293,141 +248,98 @@ class SRPanel(ModuleCard):
         self._rebuild()
 
     def target_key(self):
-        data = self.target.currentData()
-        return data[0] if data else self._target_key
+        return self._target_key
+
+    def want_key(self):
+        """兼容旧调用：现在目标就是用户选的那一档。"""
+        return self._target_key
 
     def target_long(self):
-        data = self.target.currentData()
-        return int(data[1]) if data else 3840
+        for key, _label, long_side in TARGETS:
+            if key == self._target_key:
+                return long_side
+        return 1920
 
     def cap_limit(self):
-        value = self.cap.currentData()
-        return int(value) if value is not None else DEFAULT_MAX_OUTPUT_LONG
+        return DEFAULT_MAX_OUTPUT_LONG
 
-    def set_cap(self, limit):
-        idx = self.cap.findData(int(limit or 0))
-        if idx >= 0:
-            self.cap.setCurrentIndex(idx)
+    def plan(self, src_w=None, src_h=None):
+        """按当前档位算这一条怎么出片（缩到哪、要不要跑模型）。"""
+        w = self._src_w if src_w is None else int(src_w or 0)
+        h = self._src_h if src_h is None else int(src_h or 0)
+        if not (w and h):
+            return {"need_sr": True, "scale": 2, "final": (0, 0), "reason": ""}
+        return plan_scale(w, h, self.target_long(), self.cap_limit())
 
     def set_target(self, key):
-        for i in range(self.target.count()):
-            data = self.target.itemData(i)
-            if not data:
-                continue
-            item = self.target.model().item(i)
-            if data[0] == key and (item is None or item.isEnabled()):
-                self.target.setCurrentIndex(i)
-                self._target_key = key
-                self._refresh_hint()
-                return
-        for i in range(self.target.count() - 1, -1, -1):
-            item = self.target.model().item(i)
-            if item is not None and item.isEnabled():
-                self.target.setCurrentIndex(i)
-                self._target_key = self.target_key()
-                break
+        self._target_key = key
+        if not self._select(key):
+            self._target_key = "1080p"
+            self._select("1080p")
         self._refresh_hint()
 
+    def _select(self, key):
+        for i in range(self.target.count()):
+            data = self.target.itemData(i)
+            if data and data[0] == key:
+                prev = self.target.blockSignals(True)
+                self.target.setCurrentIndex(i)
+                self.target.blockSignals(prev)
+                self._target_key = key
+                return True
+        return False
+
     def _on_target_changed(self, _idx):
-        self._target_key = self.target_key()
+        data = self.target.currentData()
+        if data:
+            self._target_key = data[0]
         self._refresh_hint()
 
     def _item_text(self, key, target_long):
-        """下拉里保持短：细节放在下方提示行。"""
         label = target_label(key)
         if not (self._src_w and self._src_h):
-            return label if target_long else "最高 · 按源自适应"
-        limit = self.cap_limit()
-        cap_name = limit_label(limit) if limit else "不限制"
-        scale, status = pick_scale(self._src_w, self._src_h, target_long, limit)
-        if status == "too_big":
-            return "%s · 源已超 %s 上限" % (label, cap_name)
-        if status == "unavailable":
-            need = float(target_long) / max(self._src_w, self._src_h)
-            return "%s · 需 %.1fx，超 %s 上限" % (label, need, cap_name)
-        if status == "unreachable":
-            return "%s · 源已超" % label
-        ow, oh = self._src_w * scale, self._src_h * scale
-        text = "%s · %dx · %d×%d" % (label, scale, ow, oh)
-        if status == "max_limited":
-            text = "⚠ " + text
-        return text
+            return "%s · 长边 %d" % (label, target_long)
+        final = final_size(self._src_w, self._src_h, target_long, self.cap_limit())
+        return "%s · 输出 %d×%d" % (label, final[0], final[1])
 
     def _rebuild(self):
-        prev = self._target_key
         blocked = self.target.blockSignals(True)
         self.target.clear()
-        enabled_keys = []
-        limit = self.cap_limit()
         for key, _label, target_long in TARGETS:
-            _, status = pick_scale(self._src_w, self._src_h, target_long, limit)
-            enabled = status not in ("unreachable", "too_big", "unavailable")
             self.target.addItem(self._item_text(key, target_long), (key, target_long))
-            item = self.target.model().item(self.target.count() - 1)
-            if item is not None:
-                item.setEnabled(enabled)
-            if enabled:
-                enabled_keys.append(key)
         self.target.blockSignals(blocked)
-
-        want = prev if prev in enabled_keys else (
-            "4K" if "4K" in enabled_keys else ("8K" if "8K" in enabled_keys else None))
-        if want is None:
-            want = enabled_keys[-1] if enabled_keys else None
-        if want is not None:
-            self.set_target(want)
-        else:
-            self._refresh_hint()
+        if not self._select(self._target_key):
+            self._select("1080p")
+        self._refresh_hint()
 
     def _refresh_hint(self):
         if not (self._src_w and self._src_h):
-            self.scale_hint.setText("加入视频后按源长边自动换算倍率")
+            self.scale_hint.setText("加入视频后按长边换算：小图超分到目标，大图只缩小")
             return
-        limit = self.cap_limit()
-        cap_name = limit_label(limit) if limit else "不限制"
-        key = self.target_key()
-        scale, status = pick_scale(self._src_w, self._src_h, self.target_long(), limit)
-        long_side = max(self._src_w, self._src_h)
-        if status == "too_big":
-            self.scale_hint.setText(
-                "源长边 %d 已达到「%s」上限，本次会跳过超分" % (long_side, cap_name))
-            return
-        if status == "unavailable":
-            need = float(self.target_long()) / long_side
-            self.scale_hint.setText(
-                "目标 %s 需要 %.1fx，会超过「%s」上限，这一档不可选"
-                % (target_label(key), need, cap_name))
-            return
-        ow, oh = self._src_w * scale, self._src_h * scale
-        txt = "源 %d×%d → %s 用 %dx · %d×%d（%s）" % (
-            self._src_w, self._src_h, target_label(key), scale, ow, oh, _k_label(ow, oh))
-        if status == "up":
-            txt += " · 无法精确命中，取上一档"
-        elif status == "max":
-            txt += " · 上限内最大倍率"
-        elif status == "max_limited":
-            txt += " · 4x 会超「%s」上限，最高只到 %dx" % (cap_name, scale)
-        if max(ow, oh) > 4096:
+        w, h = self._src_w, self._src_h
+        plan = self.plan()
+        fw, fh = plan["final"]
+        if not plan["need_sr"]:
+            txt = "源 %d×%d 长边已到 %d：跳过超分，缩到 %d×%d" % (
+                w, h, max(w, h), fw, fh)
+        else:
+            txt = "源 %d×%d → %dx 超分 %d×%d → 缩到 %d×%d" % (
+                w, h, plan["scale"], w * plan["scale"], h * plan["scale"], fw, fh)
+            if plan.get("reason"):
+                txt += " · " + plan["reason"]
+        if max(fw, fh) > 4096:
             txt += " · 超 4096，自动用 CPU 编码"
         self.scale_hint.setText(txt)
 
     # ---------------------------------------------------------- 取值
     def options(self, src_w=None, src_h=None):
-        w = self._src_w if src_w is None else int(src_w or 0)
-        h = self._src_h if src_h is None else int(src_h or 0)
-        limit = self.cap_limit()
-        scale, status = pick_scale(w, h, self.target_long(), limit)
-        skip = ""
-        if status == "too_big":
-            scale = 2
-            skip = "源长边 %d 已达到输出上限 %s，跳过超分" % (
-                max(int(w or 0), int(h or 0)),
-                limit_label(limit) if limit else "不限制")
+        plan = self.plan(src_w, src_h)
         denoise = self.denoise.currentData()
         return {
-            "scale": int(scale or 2),
-            "skip_reason": skip,
-            "max_output_long": limit,
+            "scale": int(plan["scale"] or 2),
+            "target_long": self.target_long(),
+            "skip_reason": "",
+            "max_output_long": self.cap_limit(),
             "denoise": None if denoise == "auto" else int(denoise),
             "model": "auto",
             "crf": 17,
@@ -437,8 +349,6 @@ class SRPanel(ModuleCard):
 
     def apply_preset(self, preset):
         pass  # 预设不改目标分辨率
-
-
 class OutputPanel(QFrame):
     """输出：目录 / 画质 / 编码器 / 测试模式（两张卡共用）。"""
 
@@ -470,49 +380,25 @@ class OutputPanel(QFrame):
 
         self.quality = SegmentedControl(QUALITY_OPTIONS, 17)
         outer.addWidget(Field("crf", "画质", self.quality, _hint("crf")))
-
-        self.encoder = _combo([("自动（有 NVENC 就用）", "auto"),
-                               ("NVIDIA NVENC", "nvenc"), ("CPU x264", "x264")], "auto")
-        outer.addWidget(Field("encoder", "编码器", self.encoder, _hint("encoder")))
-
-        self.crf = QSpinBox()
-        self.crf.setRange(0, 51)
-        self.crf.setValue(17)
-        outer.addWidget(Field("crf", "精确 crf", self.crf,
-                              "0 最清晰、51 最糊，常用 17~23"))
         outer.addStretch(1)
-
-        self.quality.changed.connect(self._on_quality)
-        self.crf.valueChanged.connect(self._on_crf_changed)
-
-    def _on_quality(self, value):
-        if int(self.crf.value()) != int(value):
-            self.crf.setValue(int(value))
-
-    def _on_crf_changed(self, value):
-        match = [d for _, d in QUALITY_OPTIONS if int(d) == int(value)]
-        if match:
-            self.quality.set_value(match[0])
-        else:
-            for btn, _data in self.quality._buttons:
-                btn.setChecked(False)
-            self.quality._current = value
 
     # ---------------------------------------------------------- 取值
     def out_dir_text(self):
         return self.out_dir.text().strip()
 
     def crf_value(self):
-        return int(self.crf.value())
+        value = self.quality.value()
+        return int(value if value is not None else 17)
 
     def encoder_value(self):
-        return self.encoder.currentData()
+        """编码器固定自动：有 NVENC 用显卡，超 4096 自动退 CPU。"""
+        return "auto"
 
-    def out_path(self, video, mode, scale, preview=False):
+    def out_path(self, video, mode, scale, preview=False, tag=""):
         d = self.out_dir_text()
         if not d:
             return None
-        base = default_out(video, mode, scale, preview=preview)
+        base = default_out(video, mode, scale, preview=preview, tag=tag)
         try:
             os.makedirs(d, exist_ok=True)
         except OSError:

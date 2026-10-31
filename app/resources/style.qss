@@ -149,6 +149,30 @@ QProgressBar::chunk {
     border-radius: 7px;
 }
 
+/* 底部运行状态条：主操作 / 进度 / 状态 / 维护按钮 */
+QFrame#statusStrip {
+    background: #f6f8fc;
+    border: 1px solid #e2e7f0;
+    border-radius: 9px;
+}
+
+QFrame#statusStrip QLabel#hintLabel {
+    color: #3f4b63;
+}
+
+QPushButton#ghostButton {
+    background: transparent;
+    border: 1px solid #d8dfeb;
+    border-radius: 6px;
+    color: #4a5568;
+    padding: 2px 10px;
+}
+
+QPushButton#ghostButton:hover {
+    background: #eef2f9;
+    border-color: #c3cee0;
+}
+
 QPlainTextEdit {
     background: #0f1420;
     color: #cfd8e6;

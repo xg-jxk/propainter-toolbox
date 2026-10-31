@@ -11,28 +11,21 @@ TERMS_VERSION = 1
 
 DEFAULTS = {
     "repair_enabled": True,
-    "sr_enabled": False,
+    "sr_enabled": True,          # 修复+超分是主用法，默认两个都开
     "detect": "auto",            # auto | rect | mask
     "rect": "",
     "mask": "",
     "padding": 0.45,
-    "subvideo": 40,
-    "mask_dilation": 2,
-    "detect_thr": 0.62,
-    "ref_stride": 12,
-    "sr_target": "4K",           # 1080p | 2K | 4K | 8K | max
-    "sr_max_output": 7680,       # 0 = 不限制
-    "denoise": "auto",           # auto | -1 | 0 | 1 | 2 | 3
+    "sr_target": "1080p",        # 1080p | 2K | 4K | 8K | max（够不着时自动就近取档）
+    "denoise": "auto",           # auto | -1 | 1 | 2 | 3
     "model": "models-pro",
     "out_dir": "",               # 空 = 与源视频同目录
-    "crf": 17,
-    "encoder": "auto",
+    "crf": 17,                   # 只有三档：17 高 / 20 中 / 23 低
     "test_mode": False,
     "test_seconds": 3,
     "test_start": 0.0,
-    "keep": False,
     "open_when_done": True,
-    "preset": "balanced",
+    "preset": "balanced",        # fast | balanced | detail（"" = 自定义）
     "log_open": False,
     "mode": "repair",            # 旧版字段，仅用于迁移
     "workdir": "",
@@ -66,14 +59,38 @@ def _merge(base, extra):
     return out
 
 
+def migrate(cfg):
+    """把旧版配置一次性迁到参数精简后的语义（只做一次，靠 ui_version 标记）。
+
+    旧版默认目标 "4K" 在低分辨率源上会自动滑到 8K/最高，所以这次统一回到 1080p。
+    """
+    if int(cfg.get("ui_version", 0) or 0) >= 2:
+        return cfg
+    cfg["sr_target"] = "1080p"
+    if str(cfg.get("preset", "")) == "quality":
+        cfg["preset"] = "detail"          # 旧预设改名，且不再绑定画质
+    try:
+        crf = int(cfg.get("crf", 17))
+    except (TypeError, ValueError):
+        crf = 17
+    cfg["crf"] = 17 if crf <= 17 else (20 if crf <= 20 else 23)
+    if str(cfg.get("denoise", "auto")) == "0":   # 旧「0 保守」并到「弱」
+        cfg["denoise"] = "1"
+    cfg["ui_version"] = 2
+    for key in ("subvideo", "mask_dilation", "detect_thr", "ref_stride",
+                "sr_max_output", "encoder", "keep"):
+        cfg.pop(key, None)
+    return cfg
+
+
 def load(path=None):
     path = path or config_path()
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return _merge(DEFAULTS, data)
     except (OSError, ValueError):
         return copy.deepcopy(DEFAULTS)
+    return _merge(DEFAULTS, migrate(dict(data)))
 
 
 def save(cfg, path=None):

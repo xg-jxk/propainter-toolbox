@@ -4,10 +4,12 @@
 # 用法：  powershell -NoProfile -ExecutionPolicy Bypass -File build\make.ps1
 #         powershell ... -File build\make.ps1 -SkipInstall        # 已装过 PyInstaller
 #         powershell ... -File build\make.ps1 -SkipInstall -Zip   # 同时产出便携包
-#         powershell ... -File build\make.ps1 -DistRoot dist_new  # 输出到别的目录（程序在运行时用这个）
+#         powershell ... -File build\make.ps1 -DistRoot dist_new  # 输出到别的目录
+#         powershell ... -File build\make.ps1 -KeepRunning        # 程序在跑时直接报错，不自动关闭
 param(
     [switch]$SkipInstall,
     [switch]$Zip,
+    [switch]$KeepRunning,
     [string]$Python = "",
     [string]$DistRoot = ""
 )
@@ -28,12 +30,38 @@ if (-not (Test-Path -LiteralPath $py)) {
 $distBase = if ($DistRoot) { Join-Path $Root $DistRoot } else { Join-Path $Root "dist" }
 
 # ---- 保护：只有写默认的 dist 时才需要程序没在运行（否则会删掉正在用的文件）；
-#      用 -DistRoot 输出到别的目录不受影响
+#      用 -DistRoot 输出到别的目录不受影响。
+#      默认自动关掉在跑的程序（先发关闭消息，8 秒不退出再强制结束）；
+#      -KeepRunning 则保持旧行为：发现程序在跑就报错退出。
 if (-not $DistRoot) {
-    $running = Get-Process -Name ProPainterToolbox -ErrorAction SilentlyContinue
-    if ($running) {
+    $running = @(Get-Process -Name ProPainterToolbox -ErrorAction SilentlyContinue)
+    if ($running.Count -gt 0) {
         $pids = ($running | ForEach-Object { $_.Id }) -join ","
-        throw "检测到 ProPainterToolbox.exe 正在运行（pid=$pids）。请先关闭程序，或用 -DistRoot dist_build 输出到别的目录。"
+        if ($KeepRunning) {
+            throw "检测到 ProPainterToolbox.exe 正在运行（pid=$pids）。-KeepRunning 时不会自动关闭，请先退出程序，或用 -DistRoot dist_build 输出到别的目录。"
+        }
+        Write-Host "[build] 检测到程序在运行（pid=$pids），先自动关闭 ..." -ForegroundColor Yellow
+        foreach ($p in $running) {
+            try { [void]$p.CloseMainWindow() } catch { }
+        }
+        $deadline = (Get-Date).AddSeconds(8)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 300
+            $alive = @($running | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue })
+            if ($alive.Count -eq 0) { break }
+        }
+        foreach ($p in $running) {
+            if (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) {
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Start-Sleep -Milliseconds 500
+        $left = @(Get-Process -Name ProPainterToolbox -ErrorAction SilentlyContinue)
+        if ($left.Count -gt 0) {
+            $leftIds = ($left | ForEach-Object { $_.Id }) -join ","
+            throw "关不掉 ProPainterToolbox.exe（pid=$leftIds），请手动退出后再打包。"
+        }
+        Write-Host "[build] 已关闭（若当时有任务在跑，该任务作废）" -ForegroundColor Yellow
     }
 }
 if ((-not $DistRoot) -and (Test-Path -LiteralPath $distBase)) {

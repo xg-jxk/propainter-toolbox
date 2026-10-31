@@ -25,6 +25,7 @@ class RepairOptions:
     crf: int = 17
     encoder: str = "auto"
     preset: Optional[str] = None
+    cap_size: bool = True               # 按分辨率封顶码率，防止体积失控
     detect_thr: float = 0.62
     detect_fill: Optional[float] = None
     detect_aspect: Optional[float] = None
@@ -46,6 +47,7 @@ class RepairOptions:
             crf=int(_get(d, "crf", 17)),
             encoder=str(_get(d, "encoder", "auto")),
             preset=_get(d, "preset", None),
+            cap_size=bool(_get(d, "cap_size", True)),
             detect_thr=float(_get(d, "detect_thr", 0.62)),
             detect_fill=(None if d.get("detect_fill") in (None, "") else float(d["detect_fill"])),
             detect_aspect=(None if d.get("detect_aspect") in (None, "") else float(d["detect_aspect"])),
@@ -84,6 +86,7 @@ class RepairOptions:
 @dataclass
 class SROptions:
     scale: int = 2
+    target_long: int = 0             # >0 = 统一长边（1080p=1920…）；0 = 按 scale 老行为
     denoise: Optional[int] = None       # None = 按分辨率自动
     model: str = "models-pro"
     max_output_long: int = 7680      # 0 = 不限制
@@ -91,6 +94,7 @@ class SROptions:
     crf: int = 17
     encoder: str = "auto"
     preset: Optional[str] = None
+    cap_size: bool = True               # 按输出分辨率封顶码率
     keep: bool = False
 
     @classmethod
@@ -99,6 +103,7 @@ class SROptions:
         den = d.get("denoise", None)
         return cls(
             scale=int(_get(d, "scale", 2)),
+            target_long=int(_get(d, "target_long", 0)),
             denoise=(None if den in (None, "") else int(den)),
             model=str(_get(d, "model", "auto")),
             max_output_long=int(_get(d, "max_output_long", 7680)),
@@ -106,6 +111,7 @@ class SROptions:
             crf=int(_get(d, "crf", 17)),
             encoder=str(_get(d, "encoder", "auto")),
             preset=_get(d, "preset", None),
+            cap_size=bool(_get(d, "cap_size", True)),
             keep=bool(_get(d, "keep", False)),
         )
 
@@ -113,6 +119,8 @@ class SROptions:
         from .events import JobError
         if self.scale not in (2, 3, 4):
             raise JobError("scale 只能是 2 / 3 / 4")
+        if self.target_long and not (1024 <= self.target_long <= 16384):
+            raise JobError("target_long 只能是 0（不统一尺寸）或 1024~16384")
         if self.denoise not in (None, -1, 0, 1, 2, 3):
             raise JobError("denoise 只能是 -1 / 0 / 1 / 2 / 3")
         if not (0 <= self.crf <= 51):
@@ -160,20 +168,22 @@ def _unique(base, ext=".mp4"):
     return cand
 
 
-def default_out(video, mode="repair", scale=2, preview=False):
+def default_out(video, mode="repair", scale=2, preview=False, tag=""):
     """按模式给出默认输出路径；重名自动加 (2)(3)…
 
-    preview=True 时只加 `_预览` 后缀（测试模式），不区分修复/超分。
+    preview=True 时只加 `_预览` 后缀（测试模式），不区分修复/超分；
+    tag 非空时用它当后缀（统一尺寸模式用 "1080p" 这种，比 "3x" 直观）。
     """
     video = os.path.abspath(video)
     directory = os.path.dirname(video)
     name = os.path.splitext(os.path.basename(video))[0]
+    unit = tag or ("%dx" % int(scale))
     if preview:
         suffix = "_预览"
     elif mode == "repair":
         suffix = "_已修复"
     elif mode == "sr":
-        suffix = "_%dx" % int(scale)
+        suffix = "_%s" % unit
     else:
-        suffix = "_已修复_%dx" % int(scale)
+        suffix = "_已修复_%s" % unit
     return _unique(os.path.join(directory, name + suffix))

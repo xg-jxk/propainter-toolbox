@@ -24,6 +24,7 @@ class QueueItem:
     message: str = ""
     width: int = 0
     height: int = 0
+    probe_error: str = ""       # 读不到分辨率时的原因，直接说给用户听
 
     @property
     def name(self):

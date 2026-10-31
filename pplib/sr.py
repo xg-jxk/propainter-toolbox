@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import time
+from dataclasses import replace
 
 import cv2
 
@@ -13,7 +14,9 @@ from .events import Cancelled, JobError
 from .const import temp_root, DEFAULT_MAX_OUTPUT_LONG
 from .ffmpeg import (CUGAN_DIR, CUGAN_EXE, dir_size, encode_frames,
                      ensure_out_writable, extract_frames, human_size, probe,
-                     run_stream)
+                     probe_size, run_stream, scale_video)
+from .options import default_out
+from .scaling import plan_scale, target_tag
 
 PCT_EXTRACT = (2.0, 15.0)
 PCT_UPSCALE = (15.0, 88.0)
@@ -48,7 +51,13 @@ def clamp_scale(width, height, scale, limit=DEFAULT_MAX_OUTPUT_LONG):
     return int(scale), False
 
 
-def run_sr(video, opts, emit, out=None, final=True):
+def run_sr(video, opts, emit, out=None, final=True, limit=None):
+    """执行一次超分。limit=None 时按 opts.cap_size 决定要不要封顶码率。
+
+    opts.target_long > 0 时按「统一长边」出片：
+      - 源长边已达标 → 不跑模型，直接缩到标准尺寸
+      - 否则按 plan_scale 选倍率，超分后再缩到目标尺寸
+    """
     video = os.path.abspath(video)
     if not os.path.isfile(video):
         raise JobError("找不到视频：%s" % video)
@@ -61,6 +70,37 @@ def run_sr(video, opts, emit, out=None, final=True):
             emit.done(out=None, size=None, elapsed=0.0,
                       extra={"skipped": "sr", "reason": reason})
         return result
+
+    target = int(getattr(opts, "target_long", 0) or 0)
+    cap = int(getattr(opts, "max_output_long", DEFAULT_MAX_OUTPUT_LONG) or 0)
+    out_tag = target_tag(target) if target else ""
+
+    # 统一长边模式：先按源尺寸规划，源已达标就不用跑模型了
+    if target:
+        src_w, src_h = probe_size(video)
+        plan = plan_scale(src_w, src_h, target, cap)
+        if not plan["need_sr"]:
+            out = out or default_out(video, "sr", opts.scale, tag=out_tag)
+            ensure_out_writable(out)
+            emit.log("%s，统一缩放到 %dx%d" % (plan["reason"], plan["final"][0],
+                                               plan["final"][1]))
+            t0 = time.time()
+            use_cap = bool(getattr(opts, "cap_size", True)) if limit is None else bool(limit)
+            scale_video(video, out, plan["final"], crf=opts.crf,
+                        encoder=opts.encoder, preset=opts.preset,
+                        emit=emit, limit=use_cap)
+            size = os.path.getsize(out) if os.path.isfile(out) else None
+            result = {"out": out, "size": size, "elapsed": time.time() - t0,
+                      "frames": None, "skipped_model": True,
+                      "reason": plan["reason"]}
+            if final:
+                emit.total_pct(100)
+                emit.done(out=out, size=size, elapsed=result["elapsed"],
+                          extra={"scale": 0, "reason": plan["reason"]})
+            return result
+        # 需要超分：用规划出来的倍率（CLI 传的 scale 只在不统一尺寸时生效）
+        opts = replace(opts, scale=int(plan["scale"]))
+
     check_cugan()
 
     model_root = str(CUGAN_DIR)
@@ -72,8 +112,7 @@ def run_sr(video, opts, emit, out=None, final=True):
         raise JobError("Real-CUGAN 一个模型都没找到：%s" % model_root,
                        "重新运行 setup.cmd 下载 Real-CUGAN")
 
-    from .options import default_out
-    out = out or default_out(video, "sr", opts.scale)
+    out = out or default_out(video, "sr", opts.scale, tag=out_tag)
     ensure_out_writable(out)
 
     t0 = time.time()
@@ -82,6 +121,7 @@ def run_sr(video, opts, emit, out=None, final=True):
     os.makedirs(fdir, exist_ok=True)
     os.makedirs(udir, exist_ok=True)
     wdir = os.path.join(job, "work")
+    final_size = None
     try:
         emit.stage("探测视频", 1)
         fps, has_audio, src_dur = probe(video)
@@ -110,6 +150,9 @@ def run_sr(video, opts, emit, out=None, final=True):
                 emit.done(out=None, size=None, elapsed=0.0,
                           extra={"skipped": "sr", "reason": reason})
             return result
+        if target:
+            # 统一尺寸：编码时缩到规划好的最终尺寸
+            final_size = plan_scale(w, h, target, cap)["final"]
 
         denoise = opts.denoise
         if denoise is None:
@@ -157,8 +200,10 @@ def run_sr(video, opts, emit, out=None, final=True):
                            "可能是磁盘满或 Real-CUGAN 中途退出")
 
         emit.stage("编码", PCT_ENCODE[0])
+        cap = bool(getattr(opts, "cap_size", True)) if limit is None else bool(limit)
         encode_frames(udir, video, out, fps, n, has_audio,
-                      encoder=opts.encoder, crf=opts.crf, preset=opts.preset, emit=emit)
+                      encoder=opts.encoder, crf=opts.crf, preset=opts.preset,
+                      emit=emit, limit=cap, out_size=final_size)
         emit.total_pct(PCT_ENCODE[1])
 
         dur_out = probe(out)[2]

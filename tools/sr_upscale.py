@@ -14,6 +14,8 @@ from pplib.events import Cancelled, JobError, cli_emitter  # noqa: E402
 from pplib.options import SROptions  # noqa: E402
 from pplib.sr import run_sr  # noqa: E402
 
+TARGET_LONG = {"1080p": 1920, "2K": 2560, "4K": 3840, "8K": 7680}
+
 
 def build_parser():
     ap = argparse.ArgumentParser(description="Real-CUGAN 视频超分")
@@ -26,6 +28,10 @@ def build_parser():
     ap.add_argument("--crf", type=int, default=17)
     ap.add_argument("--encoder", default="auto", choices=["auto", "x264", "nvenc"])
     ap.add_argument("--preset", default=None, help="x264 预设，默认 medium")
+    ap.add_argument("--target", default=None, choices=["1080p", "2K", "4K", "8K"],
+                    help="统一输出长边（推荐）：小图超分到目标、大图只缩小")
+    ap.add_argument("--no-cap", action="store_true", dest="no_cap",
+                    help="不按分辨率封顶码率（4x 时文件会大很多）")
     ap.add_argument("--keep", action="store_true", help="保留中间文件")
     ap.add_argument("--log-file", dest="log_file")
     return ap
@@ -33,8 +39,10 @@ def build_parser():
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
-    opts = SROptions(scale=a.scale, denoise=a.denoise, model=a.model,
-                     crf=a.crf, encoder=a.encoder, preset=a.preset, keep=a.keep)
+    opts = SROptions(scale=a.scale, target_long=TARGET_LONG.get(a.target, 0),
+                     denoise=a.denoise, model=a.model,
+                     crf=a.crf, encoder=a.encoder, preset=a.preset, keep=a.keep,
+                     cap_size=not a.no_cap)
     emit = cli_emitter(a.log_file)
     emit.log("提示：仅限处理你拥有版权或已获授权的视频（见 TERMS.md）")
     try:

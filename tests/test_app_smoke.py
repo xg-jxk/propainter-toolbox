@@ -115,16 +115,99 @@ class AppSmokeTest(unittest.TestCase):
         win.close()
 
     # ------------------------------------------------------------ 预设
+    def test_default_target_is_1080p(self):
+        """默认 1080p（统一长边）；选什么就是什么，不会被程序改档。"""
+        win = self._win()
+        win.sr_panel.set_source_size(854, 480)
+        self.assertEqual(win.sr_panel.want_key(), "1080p")
+        self.assertEqual(win.sr_panel.target_key(), "1080p")
+        self.assertEqual(win.sr_panel.options()["scale"], 3)   # 854→1080p 要 3x
+        self.assertEqual(win.sr_panel.plan(854, 480)["final"], (1920, 1080))
+
+        # 1080p 源：档位仍然是 1080p，只是跳过超分
+        win.sr_panel.set_source_size(1920, 1080)
+        self.assertEqual(win.sr_panel.target_key(), "1080p")
+        self.assertFalse(win.sr_panel.plan(1920, 1080)["need_sr"])
+        self.assertEqual(win.sr_panel.plan(1920, 1080)["final"], (1920, 1080))
+
+        # 4K 源也还是 1080p：跳过超分 + 缩到 1080p
+        win.sr_panel.set_source_size(3840, 2160)
+        self.assertEqual(win.sr_panel.target_key(), "1080p")
+        self.assertEqual(win.sr_panel.plan(3840, 2160)["final"], (1920, 1080))
+        win.close()
+
+    def test_target_is_remembered(self):
+        """目标档位是用户选的，换源文件、换批次都不该被改写。"""
+        win = self._win()
+        win.sr_panel.set_target("4K")
+        win.sr_panel.set_source_size(854, 480)
+        self.assertEqual(win.sr_panel.target_key(), "4K")
+        win.sr_panel.set_source_size(1920, 1080)
+        self.assertEqual(win.sr_panel.target_key(), "4K")
+        self.assertEqual(win.sr_panel.plan(1920, 1080)["final"], (3840, 2160))
+        self.assertEqual(win._collect_config()["sr_target"], "4K")
+        win.close()
+
+    def test_quality_from_crf_mapping(self):
+        from app.ui.panels import quality_from_crf
+        self.assertEqual(quality_from_crf(14), 17)     # 旧预设「高质量」的 14 归到高
+        self.assertEqual(quality_from_crf(17), 17)
+        self.assertEqual(quality_from_crf(18), 20)
+        self.assertEqual(quality_from_crf(22), 23)
+        self.assertEqual(quality_from_crf(None), 17)
+
+    def test_action_areas(self):
+        """方案 C：队列操作在表格上方，运行控制在底部状态条，重置参数归设置区。"""
+        from PySide6.QtWidgets import QPushButton
+        win = self._win()
+        lv = win.table.parentWidget().layout()
+        idx_bar = lv.indexOf(win.queue_bar)
+        idx_table = lv.indexOf(win.table)
+        self.assertGreaterEqual(idx_bar, 0)
+        self.assertLess(idx_bar, idx_table, "队列工具条应在表格上方")
+        self.assertIn(win.open_btn, win.queue_bar.findChildren(QPushButton))
+
+        strip = win.findChild(type(win.status_strip), "statusStrip")
+        self.assertIsNotNone(strip)
+        for w in (win.start_btn, win.cancel_btn, win.progress, win.clean_btn):
+            self.assertTrue(strip.isAncestorOf(w), "%s 应在底部状态条里" % w.text())
+        self.assertTrue(win.preset_bar.isAncestorOf(win.reset_btn))
+
+        # 运行中清理缓存必须禁用（否则会删正在用的临时文件）
+        win.set_running(True)
+        self.assertFalse(win.clean_btn.isEnabled())
+        self.assertEqual(win.progress.format(), "%p%")
+        win.set_running(False)
+        self.assertTrue(win.clean_btn.isEnabled())
+        win.close()
+
     def test_preset_applies_values(self):
         win = self._win()
-        win._apply_preset("quality")
+        win._apply_preset("detail")
         self.assertAlmostEqual(win.repair_panel.padding.value(), 0.55, places=2)
-        self.assertEqual(win.repair_panel.subvideo.value(), 80)
-        self.assertEqual(win.output_panel.crf_value(), 14)
+        self.assertEqual(win.repair_panel._subvideo, 80)
         win._apply_preset("fast")
         self.assertAlmostEqual(win.repair_panel.padding.value(), 0.35, places=2)
-        self.assertEqual(win.output_panel.crf_value(), 22)
+        self.assertEqual(win.repair_panel._subvideo, 20)
         self.assertEqual(win._current_preset(), "fast")
+        # 预设只管上下文，不动画质
+        self.assertEqual(win.output_panel.crf_value(), 17)
+        win.close()
+
+    def test_manual_edit_clears_preset(self):
+        """手改外扩/画质后，档位要变成"自定义"。"""
+        win = self._win()
+        win._apply_preset("detail")
+        self.assertEqual(win._current_preset(), "detail")
+        win.repair_panel.padding.setValue(0.82)
+        self.assertEqual(win._current_preset(), "")
+        self.assertIn("已自定义", win.preset_hint.text())
+        win._apply_preset("fast")
+        for btn, data in win.output_panel.quality._buttons:
+            if data == 23:
+                btn.click()                      # 模拟真实点选（会发 changed 信号）
+        self.assertEqual(win.output_panel.crf_value(), 23)
+        self.assertEqual(win._current_preset(), "")
         win.close()
 
     # ------------------------------------------------------------ 折叠
@@ -139,10 +222,9 @@ class AppSmokeTest(unittest.TestCase):
     # ------------------------------------------------------------ 说明图标
     def test_every_param_has_help(self):
         from app.ui import help as uihelp
-        used = ("mode", "detect", "rect", "mask", "padding", "subvideo",
-                "mask_dilation", "detect_thr", "ref_stride",
+        used = ("mode", "detect", "rect", "mask", "padding",
                 "scale", "denoise", "model",
-                "out_dir", "crf", "encoder", "keep", "open_when_done")
+                "out_dir", "crf", "open_when_done")
         for key in used:
             self.assertIn(key, uihelp.PARAM_HELP, key)
             html = uihelp.tooltip_html(key)
@@ -153,7 +235,7 @@ class AppSmokeTest(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
         win = self._win()
         icons = [w for w in win.findChildren(QLabel) if w.objectName() == "infoIcon"]
-        self.assertGreaterEqual(len(icons), 15, "i 图标数量不对")
+        self.assertGreaterEqual(len(icons), 11, "i 图标数量不对")
         for ic in icons:
             self.assertTrue(ic.toolTip(), "有 i 图标没挂 tooltip")
             self.assertTrue(ic.bubble_html, "气泡内容为空")
@@ -375,10 +457,11 @@ class AppSmokeTest(unittest.TestCase):
             self.assertIn("h264_nvenc", captured["cmd"])
         finally:
             ffmod.run, ffmod.pick_encoder = orig_run, orig_pick
-    def test_probe_size_and_scale_labels(self):
-        """分辨率标签要按源尺寸算：1280x720 的 2x/3x/4x 分别是 1440p/2160p/2880p。"""
+    def test_target_labels_and_plan(self):
+        """目标档位按「统一长边」解释：每档都显示最终输出尺寸。"""
         import subprocess
         from pplib.ffmpeg import find_ffmpeg, probe_size
+        from pplib.scaling import final_size, plan_scale
 
         d = tempfile.mkdtemp(prefix="ppsz_")
         clip = os.path.join(d, "a.mp4")
@@ -388,84 +471,67 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(probe_size(clip), (320, 180))
         self.assertEqual(probe_size(os.path.join(d, "nope.mp4")), (0, 0))
 
+        # 16:9 吸附：854×480 属于 16:9 家族，直接钉到 1920×1080
+        self.assertEqual(final_size(854, 480, 1920), (1920, 1080))
+        self.assertEqual(final_size(3416, 1920, 1920), (1920, 1080))
+        self.assertEqual(final_size(1708, 960, 2560), (2560, 1440))
+        # 非 16:9 保持比例
+        self.assertEqual(final_size(1440, 1080, 1920), (1920, 1440))     # 4:3
+        self.assertEqual(final_size(1080, 1920, 1920), (1080, 1920))     # 竖屏
+        # 4x 也够不到：仍然补齐到目标尺寸
+        self.assertEqual(plan_scale(854, 480, 7680)["final"], (7680, 4320))
+        self.assertTrue(plan_scale(854, 480, 7680).get("reason"))
+
         win = self._win()
         win.sr_panel.set_source_size(1280, 720)
-        # 720p：2K=2x、4K=3x、8K 封顶 4x；1080p 档不可达
         texts = [win.sr_panel.target.itemText(i) for i in range(win.sr_panel.target.count())]
+        self.assertIn("1920×1080", texts[0])
         self.assertIn("2560×1440", texts[1])
         self.assertIn("3840×2160", texts[2])
-        self.assertIn("需 6.0x", texts[3])          # 被上限截住的档位加警示
-        self.assertFalse(win.sr_panel.target.model().item(0).isEnabled())
+        # 目标总是可达（不达标就跳过、够不到就补齐），所以不再有禁用项
+        self.assertTrue(all(win.sr_panel.target.model().item(i).isEnabled()
+                            for i in range(win.sr_panel.target.count())))
         win.sr_panel.set_target("4K")
-        self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 3)
-        win.sr_panel.set_target("2K")
-        self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 2)
-        win.sr_panel.set_target("max")
-        self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 4)
+        self.assertEqual(win.sr_panel.plan(1280, 720)["scale"], 3)   # 720p×3 = 3840
+        self.assertEqual(win.sr_panel.plan(1280, 720)["final"], (3840, 2160))
+        win.sr_panel.set_target("1080p")
+        self.assertEqual(win.sr_panel.plan(1280, 720)["scale"], 2)
+        self.assertEqual(win.sr_panel.plan(1280, 720)["final"], (1920, 1080))
         self.assertIn("1280×720", win.sr_panel.scale_hint.text())
         win.close()
 
-    def test_eight_k_cap(self):
-        """最高档不能放出超过 8K 的输出。"""
-        from pplib.sr import clamp_scale
-        from app.ui.panels import pick_scale
-
-        # 默认 8K 上限
-        self.assertEqual(pick_scale(1280, 720, 0), (4, "max"))
-        self.assertEqual(pick_scale(1920, 1080, 0), (4, "max"))
-        self.assertEqual(pick_scale(3840, 2160, 0), (2, "max_limited"))
-        self.assertEqual(pick_scale(7680, 4320, 0), (0, "too_big"))
-        self.assertEqual(pick_scale(1080, 1920, 0), (4, "max"))
-        # 改成 4K 上限：1080p 源最高只能 2x，4K 源直接不可用
-        self.assertEqual(pick_scale(1920, 1080, 0, 3840), (2, "max_limited"))
-        self.assertEqual(pick_scale(3840, 2160, 0, 3840), (0, "too_big"))
-        # 目标需要超过上限的倍率 → 不可选，不降档
-        self.assertEqual(pick_scale(1920, 1080, 7680, 3840), (0, "unavailable"))
-        # 不限制：4K 源也能 4x
-        self.assertEqual(pick_scale(3840, 2160, 0, 0), (4, "max"))
-        self.assertEqual(pick_scale(1920, 1080, 0, 0), (4, "max"))
-
-        # 后端兜底
-        self.assertEqual(clamp_scale(3840, 2160, 4), (0, True))
-        self.assertEqual(clamp_scale(1920, 1080, 4), (4, False))
-        self.assertEqual(clamp_scale(1280, 720, 4), (4, False))
-        self.assertEqual(clamp_scale(7680, 4320, 2), (0, True))
-        self.assertEqual(clamp_scale(0, 0, 4), (4, False))
-        # 不限制（limit=0）时按 4x 放行
-        self.assertEqual(clamp_scale(3840, 2160, 4, 0), (4, False))
-        # 4K 上限时 4K 源不可放大
-        self.assertEqual(clamp_scale(3840, 2160, 4, 3840), (0, True))
-
-    def test_window_shows_8k_cap(self):
-        win = self._win()
-        win.sr_panel.set_source_size(3840, 2160)
-        win.sr_panel.set_target("max")
-        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 2)
-        hint = win.sr_panel.scale_hint.text()
-        self.assertIn("8K", hint)
-        self.assertIn("最高只到 2x", hint)
-        # 改成不限制 → 恢复 4x
-        win.sr_panel.set_cap(0)
-        win.sr_panel.set_target("max")
-        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 4)
-        self.assertEqual(win.sr_panel.options(3840, 2160)["max_output_long"], 0)
-        win.close()
-
-    def test_cap_blocks_oversized_source(self):
-        """源超过上限时不能悄悄按 2x 放大，必须报错拦下。"""
+    def test_sr_skips_when_source_is_big_enough(self):
+        """源长边已达标：跳过超分模型，但仍缩放到统一尺寸。"""
         win = self._win()
         win.sr_panel.set_enabled_state(True)
-        win.sr_panel.set_cap(3840)
-        win.sr_panel.set_target("max")
-        opts = win.sr_panel.options(3840, 2160)
-        self.assertTrue(opts["skip_reason"], "源超上限时应标记跳过超分")
-        self.assertEqual(opts["scale"], 2)
-        self.assertEqual(win._build_spec(r"D:\a.mp4", 3840, 2160)["sr"]["scale"], 2)
-        win.sr_panel.set_cap(0)          # 不限制
-        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 4)
-        self.assertFalse(win.sr_panel.options(3840, 2160)["skip_reason"])
+        win.sr_panel.set_target("1080p")
+        plan = win.sr_panel.plan(3416, 1920)
+        self.assertFalse(plan["need_sr"])
+        self.assertEqual(plan["final"], (1920, 1080))
+        self.assertIn("跳过超分", plan["reason"])
+
+        # 1080p 源选 1080p：尺寸不变，也只走"跳过"
+        plan2 = win.sr_panel.plan(1920, 1080)
+        self.assertFalse(plan2["need_sr"])
+        self.assertEqual(plan2["final"], (1920, 1080))
+
+        # 4K 源选 8K：需要超分（2x）
+        win.sr_panel.set_target("8K")
+        plan3 = win.sr_panel.plan(3840, 2160)
+        self.assertTrue(plan3["need_sr"])
+        self.assertEqual(plan3["scale"], 2)
+        self.assertEqual(plan3["final"], (7680, 4320))
         win.close()
 
+    def test_scale_labels_follow_target(self):
+        """同一批不同源尺寸，输出尺寸必须一致（这是统一长边的核心诉求）。"""
+        win = self._win()
+        win.sr_panel.set_target("1080p")
+        outs = set()
+        for w, h in ((854, 480), (1280, 720), (1708, 960), (1920, 1080), (3416, 1920)):
+            outs.add(win.sr_panel.plan(w, h)["final"])
+        self.assertEqual(outs, {(1920, 1080)})
+        win.close()
     def test_missing_size_is_probed_before_start(self):
         """加入时没读到分辨率，开始前必须补探测，避免默默按 2x。"""
         import subprocess
@@ -479,8 +545,7 @@ class AppSmokeTest(unittest.TestCase):
 
         win = self._win()
         win.sr_panel.set_enabled_state(True)
-        win.sr_panel.set_target("max")
-        win.sr_panel.set_cap(7680)
+        win.sr_panel.set_target("1080p")
         win.queue.add_paths([clip])
         win.queue[0].width = 0          # 模拟加入时探测失败
         win.queue[0].height = 0
@@ -491,7 +556,7 @@ class AppSmokeTest(unittest.TestCase):
         win._start_next()
         self.assertEqual(win.queue[0].width, 1920)
         self.assertEqual(win.queue[0].height, 1080)
-        self.assertEqual(captured["spec"]["sr"]["scale"], 4)
+        self.assertEqual(captured["spec"]["sr"]["target_long"], 1920)
         win.close()
 
     def test_bridge_prefers_pythonw(self):
@@ -512,26 +577,20 @@ class AppSmokeTest(unittest.TestCase):
         win._rebuild_table()
 
         win.repair_panel.padding.setValue(1.2)
-        win.repair_panel.subvideo.setValue(120)
-        win.sr_panel.set_enabled_state(True)
-        win.sr_panel.set_target("max")
-        win.sr_panel.set_cap(0)
-        win.output_panel.crf.setValue(30)
+        win.sr_panel.set_enabled_state(False)
+        win.sr_panel.set_target("8K")
+        win.output_panel.quality.set_value(23)
         win.test_panel.test_mode.setChecked(True)
-        win.keep.setChecked(True)
         win.open_when_done.setChecked(False)
         win._apply_preset("fast")
 
         win.reset_params()
 
         self.assertAlmostEqual(win.repair_panel.padding.value(), 0.45, places=2)
-        self.assertEqual(win.repair_panel.subvideo.value(), 40)
-        self.assertFalse(win.sr_panel.is_enabled())
-        self.assertEqual(win.sr_panel.target_key(), "4K")
-        self.assertEqual(win.sr_panel.cap_limit(), 7680)
+        self.assertTrue(win.sr_panel.is_enabled())          # 默认修复+超分都开
+        self.assertEqual(win.sr_panel.want_key(), "1080p")  # 不再默认 4K/最高
         self.assertEqual(win.output_panel.crf_value(), 17)
         self.assertFalse(win.test_panel.test_mode.isChecked())
-        self.assertFalse(win.keep.isChecked())
         self.assertTrue(win.open_when_done.isChecked())
         self.assertEqual(win._current_preset(), "balanced")
         self.assertEqual(len(win.queue), 1)      # 队列不清空

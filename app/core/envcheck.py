@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """运行环境自检：.venv / 权重 / Real-CUGAN / ffmpeg / 显卡。"""
-import glob
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -80,43 +78,17 @@ def _has_nvenc():
 
 
 def find_ffmpeg_path(allow_import=True):
-    """定位 ffmpeg —— 不依赖 import imageio_ffmpeg。
+    """定位 ffmpeg —— 直接复用 pplib 里那一套解析。
 
     打包后的 exe 里 imageio_ffmpeg 被排除了（它带 83 MB 二进制，不值得打进壳），
-    所以这里优先用"看得见"的路径，最后才尝试 import（源码运行时才走得到）。
+    `pplib.ffmpeg.find_ffmpeg()` 会改为按路径去 .venv 里取那份二进制，
+    所以这里不再自己维护一套查找顺序。
     """
-    env = os.environ.get("FFMPEG")
-    if env and os.path.isfile(env):
-        return env
-
-    p = shutil.which("ffmpeg")
-    if p:
-        return p
-
-    exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-    cand = os.path.join(str(ROOT), "tools", "ffmpeg", exe_name)
-    if os.path.isfile(cand):
-        return cand
-
-    # 运行时装在 .venv 里：直接找 imageio-ffmpeg 自带的二进制
-    patterns = [
-        os.path.join(str(ROOT), ".venv", "Lib", "site-packages",
-                     "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
-        os.path.join(str(ROOT), ".venv", "lib", "python*", "site-packages",
-                     "imageio_ffmpeg", "binaries", "ffmpeg*"),
-    ]
-    for pat in patterns:
-        hits = sorted(glob.glob(pat))
-        if hits:
-            return hits[0]
-
-    if allow_import:
-        try:
-            import imageio_ffmpeg
-            return imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            pass
-    return None
+    try:
+        from pplib.ffmpeg import find_ffmpeg
+        return find_ffmpeg(allow_import=allow_import)
+    except Exception:
+        return None
 
 
 def check():

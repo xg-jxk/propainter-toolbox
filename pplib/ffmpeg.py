@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """ffmpeg 探测、抽帧、编码、子进程执行。"""
+import glob
 import os
 import re
 import shutil
@@ -47,8 +48,31 @@ _DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 
 # --------------------------------------------------------------- ffmpeg
 
-def find_ffmpeg():
-    """依次尝试：环境变量 FFMPEG → PATH → tools/ffmpeg → imageio-ffmpeg。"""
+_VENV_FFMPEG_PATTERNS = [
+    os.path.join(".venv", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
+    os.path.join(".venv", "lib", "python*", "site-packages", "imageio_ffmpeg",
+                 "binaries", "ffmpeg*"),
+]
+
+
+def _venv_ffmpeg():
+    """直接按路径找 .venv 里 imageio-ffmpeg 自带的二进制。
+
+    打包后的 exe 把 imageio_ffmpeg 排除了（83 MB 二进制不值得打进壳），
+    在那种进程里 `import imageio_ffmpeg` 会失败 —— 但 venv 里那份 ffmpeg 还在，
+    按路径就能拿到。GUI 进程探测分辨率走的就是这条路。
+    """
+    for pat in _VENV_FFMPEG_PATTERNS:
+        hits = sorted(p for p in glob.glob(os.path.join(str(ROOT), pat))
+                      if os.path.isfile(p))
+        if hits:
+            return hits[0]
+    return ""
+
+
+def find_ffmpeg(allow_import=True):
+    """依次尝试：环境变量 FFMPEG → PATH → tools/ffmpeg → .venv 里的 imageio 二进制
+    → import imageio-ffmpeg。找不到抛 JobError。"""
     global _ffmpeg
     if _ffmpeg:
         return _ffmpeg
@@ -64,11 +88,16 @@ def find_ffmpeg():
     if cand.is_file():
         _ffmpeg = str(cand)
         return _ffmpeg
-    try:
-        import imageio_ffmpeg
-        _ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        pass
+    cand = _venv_ffmpeg()
+    if cand:
+        _ffmpeg = cand
+        return _ffmpeg
+    if allow_import:
+        try:
+            import imageio_ffmpeg
+            _ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
     if not _ffmpeg:
         raise JobError("找不到 ffmpeg",
                        "请先运行 setup.cmd 安装依赖（imageio-ffmpeg 会自带一份），"
@@ -121,18 +150,34 @@ def probe(video):
 _SIZE_RE = re.compile(r"Video:.*?[,\s](\d{2,5})x(\d{2,5})")
 
 
-def probe_size(video):
-    """只取分辨率，返回 (宽, 高)；失败返回 (0, 0)。"""
+def probe_size_ex(video):
+    """探测分辨率，返回 (宽, 高, 原因)。成功时原因为空串。
+
+    失败原因要能直接说给用户听：是找不到 ffmpeg，还是 ffmpeg 读不了这个文件。
+    """
     try:
-        p = winproc.run([find_ffmpeg(), "-hide_banner", "-i", str(video)],
+        ff = find_ffmpeg()
+    except Exception as e:
+        return 0, 0, "找不到 ffmpeg（%s）" % e
+    try:
+        p = winproc.run([ff, "-hide_banner", "-i", str(video)],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            text=True, errors="ignore")
-        m = _SIZE_RE.search(p.stderr or "")
-        if m:
-            return int(m.group(1)), int(m.group(2))
-    except Exception:
-        pass
-    return 0, 0
+    except Exception as e:
+        return 0, 0, "ffmpeg 无法启动（%s）" % e
+    info = p.stderr or ""
+    m = _SIZE_RE.search(info)
+    if m:
+        return int(m.group(1)), int(m.group(2)), ""
+    lines = [ln.strip() for ln in info.splitlines() if ln.strip()]
+    tail = lines[-1][:160] if lines else "无输出"
+    return 0, 0, "ffmpeg 读不出视频流（%s）" % tail
+
+
+def probe_size(video):
+    """只取分辨率，返回 (宽, 高)；失败返回 (0, 0)。"""
+    w, h, _why = probe_size_ex(video)
+    return w, h
 
 
 # --------------------------------------------------------------- 子进程
@@ -323,12 +368,52 @@ def pick_encoder(prefer="auto"):
     return _encoder
 
 
-def video_encode_args(encoder, crf, preset=None):
+#: 码率上限用的 bits-per-pixel：crf 越小给得越松（线性插值，两端夹紧）。
+#: 实测 4x（3416x1920@30）用 cq14 不限码率 → 58 Mbps，体积是源的 50 倍；
+#: 0.09~0.12 bpp 已经看不出差别（PSNR 48 dB 量级），所以按分辨率封顶。
+_CAP_BPP = ((14, 0.120), (17, 0.090), (20, 0.065), (23, 0.045), (28, 0.028))
+
+
+def cap_bpp(crf):
+    """crf → 每像素每帧允许的比特数（夹在 0.008~0.18）。"""
+    crf = max(0, min(51, int(crf)))
+    pts = _CAP_BPP
+    if crf <= pts[0][0]:
+        bpp = pts[0][1]
+    elif crf >= pts[-1][0]:
+        bpp = pts[-1][1]
+    else:
+        bpp = pts[-1][1]
+        for (c0, b0), (c1, b1) in zip(pts, pts[1:]):
+            if c0 <= crf <= c1:
+                bpp = b0 + (b1 - b0) * (crf - c0) / float(c1 - c0)
+                break
+    return max(0.008, min(0.18, bpp))
+
+
+def target_maxrate(width, height, fps, crf):
+    """按输出分辨率/帧率算码率上限（bit/s）；宽高未知返回 0 = 不限制。"""
+    width, height = int(width or 0), int(height or 0)
+    if width <= 0 or height <= 0:
+        return 0
+    fps = float(fps or 0) or 30.0
+    rate = width * height * fps * cap_bpp(crf)
+    return int(max(1.5e6, min(60e6, rate)))
+
+
+def mbit(rate):
+    """码率显示成 "8.6 Mbps" 这种。"""
+    return "%.1f Mbps" % (float(rate) / 1e6)
+
+
+def video_encode_args(encoder, crf, preset=None, maxrate=0):
     enc = (encoder or "libx264").lower()
+    cap = ["-maxrate", str(int(maxrate)), "-bufsize", str(int(maxrate) * 2)] if maxrate else []
     if enc == "h264_nvenc":
         return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
-                "-cq", str(int(crf)), "-b:v", "0"]
-    return ["-c:v", "libx264", "-preset", preset or "medium", "-crf", str(int(crf))]
+                "-cq", str(int(crf)), "-b:v", "0"] + cap
+    return ["-c:v", "libx264", "-preset", preset or "medium",
+            "-crf", str(int(crf))] + cap
 
 
 
@@ -359,9 +444,13 @@ def _first_frame_size(frames_dir):
 
 
 def encode_frames(frames_dir, src_video, out, fps, n_frames, has_audio,
-                  encoder="auto", crf=17, preset=None, emit=None):
+                  encoder="auto", crf=17, preset=None, emit=None, limit=False,
+                  out_size=None):
     """把 frames_dir 下 00000.png 起的序列加上音轨，编码成 out。
 
+    out_size=(w, h) 时先按 lanczos 缩放到这个尺寸再编码（统一输出规格用）；
+    只做一次编码，不是"先出一版再转一版"。
+    limit=True 时按**最终尺寸**给码率上限（CRF + VBV 封顶）。
     音频优先 copy；mp4 不支持的编码（PCM/Opus）失败后自动退回 AAC 重编一次。
     """
     ff = find_ffmpeg()
@@ -369,23 +458,34 @@ def encode_frames(frames_dir, src_video, out, fps, n_frames, has_audio,
     duration = "%.3f" % (float(n_frames) / float(fps))
 
     width, height = _first_frame_size(frames_dir)
+    final_w, final_h = width, height
+    if out_size and int(out_size[0]) > 0 and int(out_size[1]) > 0:
+        final_w, final_h = int(out_size[0]), int(out_size[1])
     enc = pick_encoder(encoder)
-    # H.264 NVENC 最大 4096；4x 放大到 5120x2880 这类尺寸只能走 CPU
-    if enc == "h264_nvenc" and (width > NVENC_MAX_SIDE or height > NVENC_MAX_SIDE):
+    # H.264 NVENC 最大 4096；按**缩放后**的尺寸判断
+    if enc == "h264_nvenc" and (final_w > NVENC_MAX_SIDE or final_h > NVENC_MAX_SIDE):
         if emit:
             emit.log("[提示] 输出 %dx%d 超过 H.264 NVENC 上限 %d，自动改用 CPU x264 编码"
-                     % (width, height, NVENC_MAX_SIDE))
-            emit.log("       想继续用显卡编码，把倍率降一档（4x→2x/3x）")
+                     % (final_w, final_h, NVENC_MAX_SIDE))
+            emit.log("       想继续用显卡编码，把目标分辨率降一档")
         enc = "libx264"
         preset = preset or "veryfast"
-    if emit and width and height:
-        emit.log("编码 %dx%d · %s · crf %d" % (width, height, enc, int(crf)))
+    cap = target_maxrate(final_w, final_h, fps, crf) if limit else 0
+    if emit and final_w and final_h:
+        resize_note = ""
+        if (final_w, final_h) != (width, height) and width and height:
+            resize_note = "（从 %dx%d 缩放）" % (width, height)
+        emit.log("编码 %dx%d%s · %s · crf %d%s" % (
+            final_w, final_h, resize_note, enc, int(crf),
+            (" · 码率上限 %s" % mbit(cap)) if cap else ""))
 
     head = [ff, "-hide_banner", "-loglevel", "error", "-y",
             "-framerate", "%g" % fps, "-i", pattern, "-i", str(src_video), "-map", "0:v:0"]
     if has_audio:
         head += ["-map", "1:a:0"]
-    head += video_encode_args(enc, crf, preset)
+    if (final_w, final_h) != (width, height) and final_w and final_h:
+        head += ["-vf", "scale=%d:%d:flags=lanczos" % (final_w, final_h)]
+    head += video_encode_args(enc, crf, preset, cap)
     head += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
 
     hint = ("若日志里出现 No capable devices found：输出分辨率超过 H.264 NVENC 上限"
@@ -432,5 +532,50 @@ def encode_frames(frames_dir, src_video, out, fps, n_frames, has_audio,
                            "目标文件可能正被播放器占用，关闭后重试")
 
 
-def now():
-    return time.time()
+def scale_video(src, out, size, crf=17, encoder="auto", preset=None, emit=None,
+                limit=True):
+    """整条视频直接缩放到 size（源已达标、跳过超分时用）。只转一次码。"""
+    src, out = str(src), str(out)
+    w, h = int(size[0]), int(size[1])
+    fps, has_audio, dur = probe(src)
+    enc = pick_encoder(encoder)
+    if enc == "h264_nvenc" and (w > NVENC_MAX_SIDE or h > NVENC_MAX_SIDE):
+        enc = "libx264"
+        preset = preset or "veryfast"
+    cap = target_maxrate(w, h, fps, crf) if limit else 0
+    if emit:
+        emit.log("统一尺寸：缩放到 %dx%d · %s · crf %d%s" % (
+            w, h, enc, int(crf), (" · 码率上限 %s" % mbit(cap)) if cap else ""))
+    cmd = [find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+           "-i", src, "-map", "0:v:0"]
+    if has_audio:
+        cmd += ["-map", "0:a:0"]
+    cmd += ["-vf", "scale=%d:%d:flags=lanczos" % (w, h)]
+    cmd += video_encode_args(enc, crf, preset, cap)
+    cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    if has_audio:
+        cmd += ["-c:a", "copy"]
+    part = out + ".part.mp4"
+    try:
+        if os.path.exists(part):
+            os.remove(part)
+    except OSError:
+        pass
+    try:
+        run(cmd + [part], emit=emit, label="缩放")
+    except JobError as e:
+        try:
+            if os.path.exists(part):
+                os.remove(part)
+        except OSError:
+            pass
+        raise JobError(str(e), "缩放失败：目标尺寸可能超出编码器上限，或源文件已损坏")
+    try:
+        os.replace(part, out)
+    except OSError:
+        raise JobError("缩放完成但无法写入目标文件：%s" % out,
+                       "目标文件可能正被播放器占用，关闭后重试")
+    return out
+
+
+def now():    return time.time()

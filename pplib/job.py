@@ -8,8 +8,10 @@ from dataclasses import replace
 
 from .const import temp_root, MAX_QUEUE, VIDEO_EXTS, normalize_inputs  # noqa: F401  (对外兼容)
 from .events import JobError, ScaledEmitter
+from .ffmpeg import probe_size, scale_video
 from .options import JobSpec, RepairOptions, SROptions, default_out
 from .repair import run_repair
+from .scaling import plan_scale, target_tag
 from .sr import run_sr
 
 
@@ -103,7 +105,8 @@ def _run_preview(spec, emit):
 
     emit.log("测试模式：只处理 %.1fs ~ %.1fs（共 %.1fs），输出到源目录、加 _预览 后缀"
              % (start, start + seconds, seconds))
-    out = spec.out or default_out(spec.video, spec.mode, spec.sr.scale, preview=True)
+    out = spec.out or default_out(spec.video, spec.mode, spec.sr.scale, preview=True,
+                                  tag=target_tag(spec.sr.target_long))
     tmpdir = tempfile.mkdtemp(prefix="ppclip_", dir=temp_root())
     clip = os.path.join(tmpdir, "clip.mp4")
     try:
@@ -111,17 +114,19 @@ def _run_preview(spec, emit):
         sub = replace(spec, video=clip, out=out, clip_seconds=0.0, clip_start=0.0)
         res = _run_once(sub, emit, final=False) or {}
         elapsed = float(res.get("elapsed") or 0)
-        if res.get("skipped"):
+        made = res.get("out") or (out if os.path.isfile(out) else "")
+        # 修复被跳过但超分照样出片的情况也要报成品（以前会误报成"跳过"）
+        if not made:
             reason = res.get("reason")
             emit.done(out=None, size=None, elapsed=elapsed,
                       extra={"frames": res.get("frames"), "skipped": "repair",
                              "reason": reason, "preview": True})
             return dict(res, preview=True, clip_start=start, clip_seconds=seconds)
-        size = os.path.getsize(out) if os.path.isfile(out) else None
-        emit.done(out=out, size=size, elapsed=elapsed,
+        size = os.path.getsize(made) if os.path.isfile(made) else None
+        emit.done(out=made, size=size, elapsed=elapsed,
                   extra={"frames": res.get("frames"), "preview": True,
                          "clip_start": start, "clip_seconds": seconds})
-        return {"out": out, "size": size, "elapsed": elapsed,
+        return {"out": made, "size": size, "elapsed": elapsed,
                 "frames": res.get("frames"), "preview": True}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -132,16 +137,51 @@ def _run_pipeline(spec, emit, final=True):
     jobdir = tempfile.mkdtemp(prefix="ppline_", dir=temp_root())
     clean = os.path.join(jobdir, "clean.mp4")
     keep = bool(spec.repair.keep or spec.sr.keep)
+    target = int(getattr(spec.sr, "target_long", 0) or 0)
+    cap = int(getattr(spec.sr, "max_output_long", 0) or 0)
+    tag = target_tag(target) if target else ""
+    plan = None
+    if target:
+        w, h = probe_size(spec.video)
+        plan = plan_scale(w, h, target, cap)
+        if plan.get("reason"):
+            emit.log(plan["reason"])
+    # 源已经达标：这轮不跑超分模型，修复的成品直接按目标尺寸编码（只编码一次）
+    direct = plan["final"] if (plan and not plan["need_sr"]) else None
     try:
         emit.log("步骤 1/2  区域修复 ...")
         repair_opts = replace(spec.repair, crf=spec.intermediate_crf)
+        # 中间文件不封顶：它还要喂给超分，这里省几 MB 会放大成画质损失
         rep = run_repair(spec.video, repair_opts, ScaledEmitter(emit, 0.0, 46.0),
-                         out=clean, final=False)
+                         out=clean, final=False, limit=False, out_size=direct)
         skipped = bool((rep or {}).get("skipped"))
         reason = (rep or {}).get("reason")
         if skipped:
-            emit.log("⚠ 区域修复已跳过（%s），继续做超分" % reason)
+            emit.log("⚠ 区域修复已跳过（%s）" % reason)
         emit.check_cancel()
+
+        if direct is not None:
+            out = spec.out or default_out(spec.video, "pipeline", spec.sr.scale, tag=tag)
+            emit.log("步骤 2/2  跳过超分，统一输出 %dx%d" % (direct[0], direct[1]))
+            use_cap = bool(getattr(spec.sr, "cap_size", True))
+            try:
+                if skipped or not os.path.isfile(clean):
+                    scale_video(spec.video, out, direct, crf=spec.sr.crf,
+                                encoder=spec.sr.encoder, preset=spec.sr.preset,
+                                emit=emit, limit=use_cap)
+                else:
+                    shutil.copyfile(clean, out)      # clean 已经是目标尺寸
+            except OSError as e:
+                raise JobError("统一尺寸成品无法落盘：%s" % e)
+            size = os.path.getsize(out) if os.path.isfile(out) else None
+            emit.total_pct(100)
+            extra = {"frames": rep.get("frames"), "mode": "pipeline",
+                     "skipped": "sr", "reason": plan.get("reason") or ""}
+            if final:
+                emit.done(out=out, size=size, elapsed=time.time() - t0, extra=extra)
+            return {"out": out, "size": size, "elapsed": time.time() - t0,
+                    "frames": rep.get("frames"), "skipped": True,
+                    "reason": plan.get("reason") or ""}
 
         emit.log("步骤 2/2  超分 ...")
         # 跳过修复时 super-res 直接吃原视频（clean.mp4 根本不存在）
@@ -149,9 +189,9 @@ def _run_pipeline(spec, emit, final=True):
         if spec.out:
             out = spec.out
         elif skipped:
-            out = default_out(spec.video, "sr", spec.sr.scale)   # 没有修复，名字不带「_已修复」
+            out = default_out(spec.video, "sr", spec.sr.scale, tag=tag)   # 没有修复，名字不带「_已修复」
         else:
-            out = default_out(spec.video, "pipeline", spec.sr.scale)
+            out = default_out(spec.video, "pipeline", spec.sr.scale, tag=tag)
         res = run_sr(src, spec.sr, ScaledEmitter(emit, 46.0, 98.0), out=out, final=False)
         if (res or {}).get("skipped"):
             # 超分被跳过：交付修复版（没做修复的话就没产出）

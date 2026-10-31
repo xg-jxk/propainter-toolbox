@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import time
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -28,6 +29,19 @@ PCT_PASTE = (80.0, 92.0)
 PCT_ENCODE = (92.0, 100.0)
 
 PROGRESS_PREFIX = "@@PP@@"
+
+#: 显存不足时把分段帧数一路减半，最低到这么多帧
+MIN_SUBVIDEO = 10
+#: 同一段最多重试几次
+OOM_RETRIES = 2
+_OOM_MARKERS = ("out of memory", "outofmemoryerror", "cudaerrormemoryallocation",
+                "cuda error: out of memory", "insufficient memory", "显存不足")
+
+
+def looks_like_oom(exc):
+    """判断异常是不是显存不足（CUDA / torch 的报错文本都覆盖到）。"""
+    text = str(exc).lower()
+    return any(marker in text for marker in _OOM_MARKERS)
 
 
 def check_weights():
@@ -202,8 +216,8 @@ def _run_inference(seg, seg_dir, opts, emit, base_frames, total_frames):
     try:
         run_stream(cmd, on_line, cwd=str(ROOT), env=env, emit=emit, label="ProPainter 推理")
     except JobError as e:
-        raise JobError(str(e), "显存不足时把 subvideo 降到 20、padding 降到 0.3；"
-                               "驱动太旧请升级到 527.41+")
+        raise JobError(str(e), "显存不足会自动降低分段重试；仍失败请关掉其他占显存的程序、"
+                               "或把超分倍率降一档")
 
     res_dir = os.path.join(out_root, "crops", "frames")
     if not os.path.isdir(res_dir):
@@ -215,8 +229,31 @@ def _run_inference(seg, seg_dir, opts, emit, base_frames, total_frames):
     return res_dir
 
 
-def run_repair(video, opts, emit, out=None, final=True):
-    """执行一次区域修复，返回结果字典。"""
+def _infer_with_retry(seg, seg_dir, opts, emit, base_frames, total_frames):
+    """跑一段推理；显存不够就把分段帧数减半重试。返回 (结果目录, 实际用的 opts)。"""
+    cur = int(opts.subvideo)
+    tried = 0
+    while True:
+        try:
+            res = _run_inference(seg, seg_dir, opts, emit, base_frames, total_frames)
+            return res, opts
+        except JobError as e:
+            if not looks_like_oom(e) or cur <= MIN_SUBVIDEO or tried >= OOM_RETRIES:
+                raise
+            lower = max(MIN_SUBVIDEO, cur // 2)
+            emit.log("⚠ 显存不足：分段 %d 帧 → %d 帧，清掉本段残留后重试" % (cur, lower))
+            shutil.rmtree(os.path.join(seg_dir, "out"), ignore_errors=True)
+            cur, tried = lower, tried + 1
+            opts = replace(opts, subvideo=lower)
+
+
+def run_repair(video, opts, emit, out=None, final=True, limit=None, out_size=None):
+    """执行一次区域修复，返回结果字典。
+
+    limit=None 时按 opts.cap_size 决定要不要封顶码率；流水线里的中间文件
+    传 limit=False（后面还要超分，中间画质优先）。
+    out_size=(w,h) 时成品直接按这个尺寸编码（统一输出规格、跳过超分时用）。
+    """
     video = os.path.abspath(video)
     if not os.path.isfile(video):
         raise JobError("找不到视频：%s" % video)
@@ -349,7 +386,8 @@ def run_repair(video, opts, emit, out=None, final=True):
                 cv2.imwrite(os.path.join(masks, "%05d.png" % j), m)
 
             t_start = time.time()
-            res_dir = _run_inference(seg, seg_dir, opts, emit, done_before, total_frames)
+            res_dir, opts = _infer_with_retry(seg, seg_dir, opts, emit,
+                                              done_before, total_frames)
             dt = time.time() - t_start
             emit.log("seg%d 推理完成 %.0fs（%.2fs/帧）"
                      % (k, dt, dt / max(1, len(seg["frames"]))))
@@ -396,8 +434,10 @@ def run_repair(video, opts, emit, out=None, final=True):
 
         # ---- 编码 ----
         emit.stage("编码", PCT_ENCODE[0])
+        cap = bool(getattr(opts, "cap_size", True)) if limit is None else bool(limit)
         encode_frames(final_dir, video, out, fps, n, has_audio,
-                      encoder=opts.encoder, crf=opts.crf, preset=opts.preset, emit=emit)
+                      encoder=opts.encoder, crf=opts.crf, preset=opts.preset,
+                      emit=emit, limit=cap, out_size=out_size)
         emit.total_pct(PCT_ENCODE[1])
 
         dur_out = probe(out)[2]
