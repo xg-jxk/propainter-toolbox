@@ -3,7 +3,7 @@
 import os
 import time
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
                                QGridLayout,
                                QFileDialog, QFrame, QHBoxLayout, QHeaderView,
@@ -99,7 +99,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ProPainter 工具箱 v%s" % __version__)
         win_cfg = self.cfg.get("window", {})
         self.resize(int(win_cfg.get("w", 1440)), int(win_cfg.get("h", 900)))
-        self.setMinimumSize(900, 640)
+        self.setMinimumSize(1180, 720)
 
         self._build_ui()
         bubble_ui.watch_tree(self)      # 只为有 tooltip 的控件装气泡过滤器
@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self._connect()
         self._on_modules_changed()
         self._update_preview()
+        QTimer.singleShot(0, self._maybe_relayout)
 
     # ================================================================ UI
     def _build_ui(self):
@@ -330,8 +331,8 @@ class MainWindow(QMainWindow):
         self.runner.finished.connect(self._on_finished)
 
     # ================================================================ 布局
-    def _relayout_settings(self, columns):
-        """把设置区摆成 1 / 2 / 3 列（窗口变窄自动降列）。"""
+    def _relayout_settings(self, columns=3):
+        """固定三列布局（不再随窗口宽度变化）。"""
         if getattr(self, "_columns", None) == columns:
             return
         self._columns = columns
@@ -341,31 +342,16 @@ class MainWindow(QMainWindow):
             if item.widget() is not None:
                 item.widget().setParent(self._right_scroll.widget())
         for col in range(3):
-            grid.setColumnStretch(col, 0)
+            grid.setColumnStretch(col, 1)
         for row in range(8):
             grid.setRowStretch(row, 0)
 
-        grid.addWidget(self.preset_bar, 0, 0, 1, columns)
-        if columns >= 3:
-            grid.addWidget(self.repair_panel, 1, 0)
-            grid.addWidget(self.sr_panel, 1, 1)
-            grid.addWidget(self.output_panel, 1, 2)
-            grid.addWidget(self.options_row, 2, 0, 1, 3)
-            grid.setRowStretch(3, 1)
-        elif columns == 2:
-            grid.addWidget(self.repair_panel, 1, 0)
-            grid.addWidget(self.sr_panel, 1, 1)
-            grid.addWidget(self.output_panel, 2, 0, 1, 2)
-            grid.addWidget(self.options_row, 3, 0, 1, 2)
-            grid.setRowStretch(4, 1)
-        else:
-            grid.addWidget(self.repair_panel, 1, 0, 1, 1)
-            grid.addWidget(self.sr_panel, 2, 0, 1, 1)
-            grid.addWidget(self.output_panel, 3, 0, 1, 1)
-            grid.addWidget(self.options_row, 4, 0, 1, 1)
-            grid.setRowStretch(5, 1)
-        for col in range(max(columns, 1)):
-            grid.setColumnStretch(col, 1)
+        grid.addWidget(self.preset_bar, 0, 0, 1, 3)
+        grid.addWidget(self.repair_panel, 1, 0)
+        grid.addWidget(self.sr_panel, 1, 1)
+        grid.addWidget(self.output_panel, 1, 2)
+        grid.addWidget(self.options_row, 2, 0, 1, 3)
+        grid.setRowStretch(3, 1)
         for w in (self.preset_bar, self.repair_panel, self.sr_panel,
                   self.output_panel, self.options_row):
             w.show()
@@ -379,17 +365,7 @@ class MainWindow(QMainWindow):
             self.table.setColumnHidden(col, compact)
 
     def _maybe_relayout(self):
-        try:
-            width = self._right_scroll.viewport().width()
-        except Exception:
-            return
-        if width >= 800:
-            columns = 3
-        elif width >= 620:
-            columns = 2
-        else:
-            columns = 1
-        self._relayout_settings(columns)
+        self._relayout_settings(3)
         try:
             self._apply_queue_columns(self.table.viewport().width() < 560)
         except Exception:
