@@ -351,17 +351,27 @@ class AppSmokeTest(unittest.TestCase):
         Image.new("RGB", (5120, 2880)).save(os.path.join(d, "00000.png"))
         captured = {}
         orig_run, orig_pick = ffmod.run, ffmod.pick_encoder
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            out = cmd[-1]
+            if isinstance(out, str) and out.endswith(".part.mp4"):
+                open(out, "wb").close()
+
         try:
             ffmod.pick_encoder = lambda prefer="auto": "h264_nvenc"
-            ffmod.run = lambda cmd, **kw: captured.setdefault("cmd", cmd)
-            ffmod.encode_frames(d, "in.mp4", "out.mp4", 30, 1, False, encoder="auto", crf=20)
+            ffmod.run = fake_run
+            out1 = os.path.join(d, "out.mp4")
+            ffmod.encode_frames(d, "in.mp4", out1, 30, 1, False, encoder="auto", crf=20)
             self.assertIn("libx264", captured["cmd"])
             self.assertNotIn("h264_nvenc", captured["cmd"])
+            self.assertTrue(os.path.isfile(out1))          # .part 已改名
 
             small = tempfile.mkdtemp(prefix="ppenc2_")
             Image.new("RGB", (1920, 1080)).save(os.path.join(small, "00000.png"))
             captured.clear()
-            ffmod.encode_frames(small, "in.mp4", "out2.mp4", 30, 1, False, encoder="auto", crf=20)
+            out2 = os.path.join(small, "out2.mp4")
+            ffmod.encode_frames(small, "in.mp4", out2, 30, 1, False, encoder="auto", crf=20)
             self.assertIn("h264_nvenc", captured["cmd"])
         finally:
             ffmod.run, ffmod.pick_encoder = orig_run, orig_pick
@@ -554,6 +564,33 @@ class AppSmokeTest(unittest.TestCase):
         win.test_panel.test_mode.setChecked(True)
         self.assertEqual(win.test_panel.clip_seconds(), 3)
         win.close()
+
+
+    def test_cleanup_sweep(self):
+        """只清自己的前缀，且尊重时间阈值。"""
+        import time
+        from pplib import cleanup
+        d = tempfile.mkdtemp(prefix="ppclean_")
+        old = os.path.join(d, "ppwm_old")
+        new = os.path.join(d, "ppsr_new")
+        other = os.path.join(d, "notmine")
+        for p in (old, new, other):
+            os.makedirs(p)
+            open(os.path.join(p, "f.bin"), "wb").write(b"x" * 1024)
+        past = time.time() - 48 * 3600
+        os.utime(old, (past, past))
+        os.utime(other, (past, past))
+
+        count, freed = cleanup.sweep(max_age_hours=24, root=d)
+        self.assertEqual(count, 1)
+        self.assertGreater(freed, 0)
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(new))       # 太新，保留
+        self.assertTrue(os.path.exists(other))     # 不是我们的前缀
+
+        count2, _ = cleanup.sweep(max_age_hours=0, root=d)
+        self.assertEqual(count2, 1)
+        self.assertFalse(os.path.exists(new))
 
 
 if __name__ == "__main__":

@@ -387,21 +387,45 @@ def encode_frames(frames_dir, src_video, out, fps, n_frames, has_audio,
     hint = ("若日志里出现 No capable devices found：输出分辨率超过 H.264 NVENC 上限"
             "（宽高需 ≤%d），把编码器改成 CPU x264 或降低超分倍率" % NVENC_MAX_SIDE)
 
+    # 先写同名 .part，成功后再改名：失败/被取消时目标目录不会留下半成品 mp4
+    part = out + ".part.mp4"
+    try:
+        if os.path.exists(part):
+            os.remove(part)
+    except OSError:
+        pass
+
     def _encode(args):
         try:
             run(args, emit=emit, label="编码")
         except JobError as e:
+            try:
+                if os.path.exists(part):
+                    os.remove(part)
+            except OSError:
+                pass
             raise JobError(str(e), hint)
 
     if not has_audio:
-        _encode(head + [out])
-        return
+        _encode(head + [part])
+    else:
+        try:
+            _encode(head + ["-c:a", "copy", "-t", duration, part])
+        except JobError:
+            if emit:
+                emit.log("音轨无法直接拷贝，改用 AAC 重新编码 ...")
+            _encode(head + ["-c:a", "aac", "-b:a", "192k", "-t", duration, part])
+
     try:
-        _encode(head + ["-c:a", "copy", "-t", duration, out])
-    except JobError:
-        if emit:
-            emit.log("音轨无法直接拷贝，改用 AAC 重新编码 ...")
-        _encode(head + ["-c:a", "aac", "-b:a", "192k", "-t", duration, out])
+        os.replace(part, out)
+    except OSError:
+        # 极少数情况（文件被占用）退回直接拷贝
+        import shutil as _shutil
+        try:
+            _shutil.move(part, out)
+        except Exception:
+            raise JobError("编码完成但无法写入目标文件：%s" % out,
+                           "目标文件可能正被播放器占用，关闭后重试")
 
 
 def now():

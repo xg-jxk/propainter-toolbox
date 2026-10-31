@@ -74,6 +74,13 @@ def main(argv=None):
     applog.setup()
     _enable_faulthandler()
     applog.write("启动 v%s · Python %s" % (__version__, sys.version.split()[0]))
+    try:
+        from pplib import cleanup
+        n, freed = cleanup.sweep(max_age_hours=24)
+        if n:
+            applog.write("清理上次遗留的临时文件：%d 个，%s" % (n, cleanup.human(freed)))
+    except Exception:
+        pass
 
     win = MainWindow(cfg)
     win.show()

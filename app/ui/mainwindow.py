@@ -279,10 +279,13 @@ class MainWindow(QMainWindow):
         self.open_btn = QPushButton("打开输出目录")
         self.reset_btn = QPushButton("重置参数")
         self.reset_btn.setToolTip("把所有参数恢复为初始值（不会清空待处理队列）")
+        self.clean_btn = QPushButton("清理缓存")
+        self.clean_btn.setToolTip("删除处理过程中异常退出留下的临时文件")
         prow.addWidget(self.start_btn)
         prow.addWidget(self.cancel_btn)
         prow.addWidget(self.open_btn)
         prow.addWidget(self.reset_btn)
+        prow.addWidget(self.clean_btn)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         prow.addWidget(self.progress, 1)
@@ -317,6 +320,7 @@ class MainWindow(QMainWindow):
         self.cancel_btn.clicked.connect(self.cancel_current)
         self.open_btn.clicked.connect(self.open_output)
         self.reset_btn.clicked.connect(self.reset_params)
+        self.clean_btn.clicked.connect(self.clean_temp)
 
         self.repair_panel.btn_mask.clicked.connect(self.pick_mask)
         self.output_panel.btn_outdir.clicked.connect(self.pick_outdir)
@@ -773,6 +777,23 @@ class MainWindow(QMainWindow):
         self._log_target_summary()
         self.set_running(True)
         self._start_next()
+
+    def clean_temp(self):
+        from pplib import cleanup
+        items = cleanup.scan()
+        total = sum(s for _p, s, _m in items)
+        if not items:
+            QMessageBox.information(self, "清理缓存", "没有需要清理的临时文件。")
+            return
+        if QMessageBox.question(
+                self, "清理缓存",
+                "发现 %d 个临时残留（%s），通常是取消或崩溃留下的。\n\n"
+                "全部删除？" % (len(items), cleanup.human(total))) != QMessageBox.StandardButton.Yes:
+            return
+        n, freed = cleanup.sweep(max_age_hours=0)
+        self.append_log("清理临时文件：%d 个，释放 %s" % (n, cleanup.human(freed)))
+        QMessageBox.information(self, "清理缓存",
+                                "已删除 %d 个残留，释放 %s。" % (n, cleanup.human(freed)))
 
     def reset_params(self):
         """一键恢复所有参数初始值（不动队列、不动窗口大小）。"""
