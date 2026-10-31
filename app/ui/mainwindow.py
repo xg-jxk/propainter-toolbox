@@ -27,7 +27,7 @@ from . import bubble as bubble_ui
 from .help import checkbox_with_info, info_icon
 from .install_dialog import InstallDialog
 from .links import PROJECT_URL, load_icon, open_url
-from .panels import (PRESETS, OutputPanel, RepairPanel, SRPanel,
+from .panels import (PRESETS, OutputPanel, RepairPanel, SRPanel, TestPanel,
                      pick_scale)
 from .terms_dialog import TermsDialog
 from .widgets import Collapsible
@@ -235,6 +235,7 @@ class MainWindow(QMainWindow):
         self.repair_panel = RepairPanel()
         self.sr_panel = SRPanel()
         self.output_panel = OutputPanel()
+        self.test_panel = TestPanel()
 
         opts_wrap = QWidget()
         opts = QHBoxLayout(opts_wrap)
@@ -246,6 +247,14 @@ class MainWindow(QMainWindow):
         opts.addWidget(checkbox_with_info(self.open_when_done, "open_when_done"))
         opts.addStretch(1)
         self.options_row = opts_wrap
+
+        self.right_stack = QWidget()
+        rs = QVBoxLayout(self.right_stack)
+        rs.setContentsMargins(0, 0, 0, 0)
+        rs.setSpacing(14)
+        rs.addWidget(self.output_panel, 0)
+        rs.addWidget(self.test_panel, 0)
+        rs.addStretch(0)
 
         right.setWidget(inner)
         self._right_scroll = right
@@ -320,9 +329,9 @@ class MainWindow(QMainWindow):
         self.sr_panel.target.currentIndexChanged.connect(self._update_preview)
         self.output_panel.out_dir.textChanged.connect(self._update_preview)
         self.output_panel.crf.valueChanged.connect(self._update_preview)
-        self.output_panel.test_mode.toggled.connect(self._update_preview)
-        self.output_panel.test_seconds.valueChanged.connect(self._update_preview)
-        self.output_panel.test_start.valueChanged.connect(self._update_preview)
+        self.test_panel.test_mode.toggled.connect(self._update_preview)
+        self.test_panel.test_seconds.valueChanged.connect(self._update_preview)
+        self.test_panel.test_start.valueChanged.connect(self._update_preview)
 
         self.runner.started.connect(self._on_runner_started)
         self.runner.logLine.connect(self.append_log)
@@ -349,11 +358,11 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.preset_bar, 0, 0, 1, 3)
         grid.addWidget(self.repair_panel, 1, 0)
         grid.addWidget(self.sr_panel, 1, 1)
-        grid.addWidget(self.output_panel, 1, 2)
+        grid.addWidget(self.right_stack, 1, 2)
         grid.addWidget(self.options_row, 2, 0, 1, 3)
         grid.setRowStretch(3, 1)
         for w in (self.preset_bar, self.repair_panel, self.sr_panel,
-                  self.output_panel, self.options_row):
+                  self.right_stack, self.options_row):
             w.show()
 
     def _apply_queue_columns(self, compact):
@@ -401,9 +410,9 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.sr_panel.denoise.setCurrentIndex(idx)
         self.output_panel.out_dir.setText(c.get("out_dir", ""))
-        self.output_panel.test_mode.setChecked(bool(c.get("test_mode", False)))
-        self.output_panel.test_seconds.setValue(int(c.get("test_seconds", 3)))
-        self.output_panel.test_start.setValue(float(c.get("test_start", 0.0)))
+        self.test_panel.test_mode.setChecked(bool(c.get("test_mode", False)))
+        self.test_panel.test_seconds.setValue(int(c.get("test_seconds", 3)))
+        self.test_panel.test_start.setValue(float(c.get("test_start", 0.0)))
         self.output_panel.crf.setValue(int(c.get("crf", 17)))
         idx = self.output_panel.encoder.findData(c.get("encoder", "auto"))
         if idx >= 0:
@@ -436,9 +445,9 @@ class MainWindow(QMainWindow):
             "denoise": str(self.sr_panel.denoise.currentData()),
             "model": "auto",
             "out_dir": self.output_panel.out_dir_text(),
-            "test_mode": self.output_panel.test_mode.isChecked(),
-            "test_seconds": self.output_panel.test_seconds.value(),
-            "test_start": round(self.output_panel.test_start.value(), 1),
+            "test_mode": self.test_panel.test_mode.isChecked(),
+            "test_seconds": self.test_panel.test_seconds.value(),
+            "test_start": round(self.test_panel.test_start.value(), 1),
             "crf": self.output_panel.crf_value(),
             "encoder": self.output_panel.encoder_value(),
             "keep": self.keep.isChecked(),
@@ -485,7 +494,7 @@ class MainWindow(QMainWindow):
         _src_w = self.queue[0].width if len(self.queue) else 0
         _src_h = self.queue[0].height if len(self.queue) else 0
         scale = pick_scale(_src_w, _src_h, self.sr_panel.target_long())[0]
-        preview = self.output_panel.test_mode.isChecked()
+        preview = self.test_panel.test_mode.isChecked()
         path = self.output_panel.out_path(video, mode, scale, preview=preview)
         if not path:
             path = default_out(video, mode, scale, preview=preview)
@@ -706,10 +715,10 @@ class MainWindow(QMainWindow):
             "mode": mode,
             "video": video,
                         "out": self.output_panel.out_path(video, mode, sr["scale"],
-                                       preview=self.output_panel.test_mode.isChecked()),
+                                       preview=self.test_panel.test_mode.isChecked()),
             "intermediate_crf": 12,
-            "clip_seconds": self.output_panel.clip_seconds(),
-            "clip_start": self.output_panel.clip_start(),
+            "clip_seconds": self.test_panel.clip_seconds(),
+            "clip_start": self.test_panel.clip_start(),
             "repair": repair,
             "sr": sr,
         }
@@ -788,9 +797,9 @@ class MainWindow(QMainWindow):
         idx = self.output_panel.encoder.findData(str(d["encoder"]))
         if idx >= 0:
             self.output_panel.encoder.setCurrentIndex(idx)
-        self.output_panel.test_mode.setChecked(bool(d["test_mode"]))
-        self.output_panel.test_seconds.setValue(int(d["test_seconds"]))
-        self.output_panel.test_start.setValue(float(d["test_start"]))
+        self.test_panel.test_mode.setChecked(bool(d["test_mode"]))
+        self.test_panel.test_seconds.setValue(int(d["test_seconds"]))
+        self.test_panel.test_start.setValue(float(d["test_start"]))
         self.keep.setChecked(bool(d["keep"]))
         self.open_when_done.setChecked(bool(d["open_when_done"]))
         preset = str(d.get("preset", "balanced"))

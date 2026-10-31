@@ -287,13 +287,13 @@ class AppSmokeTest(unittest.TestCase):
         win.close()
     def test_test_mode_in_spec(self):
         win = self._win()
-        win.output_panel.test_mode.setChecked(True)
-        win.output_panel.test_seconds.setValue(3)
-        win.output_panel.test_start.setValue(2.5)
+        win.test_panel.test_mode.setChecked(True)
+        win.test_panel.test_seconds.setValue(3)
+        win.test_panel.test_start.setValue(2.5)
         spec = win._build_spec(r"C:\v\a.mp4")
         self.assertEqual(spec["clip_seconds"], 3)
         self.assertAlmostEqual(spec["clip_start"], 2.5, places=1)
-        win.output_panel.test_mode.setChecked(False)
+        win.test_panel.test_mode.setChecked(False)
         self.assertEqual(win._build_spec(r"C:\v\a.mp4")["clip_seconds"], 0)
         win.close()
 
@@ -504,7 +504,7 @@ class AppSmokeTest(unittest.TestCase):
         win.sr_panel.set_target("max")
         win.sr_panel.set_cap(0)
         win.output_panel.crf.setValue(30)
-        win.output_panel.test_mode.setChecked(True)
+        win.test_panel.test_mode.setChecked(True)
         win.keep.setChecked(True)
         win.open_when_done.setChecked(False)
         win._apply_preset("fast")
@@ -517,7 +517,7 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(win.sr_panel.target_key(), "4K")
         self.assertEqual(win.sr_panel.cap_limit(), 7680)
         self.assertEqual(win.output_panel.crf_value(), 17)
-        self.assertFalse(win.output_panel.test_mode.isChecked())
+        self.assertFalse(win.test_panel.test_mode.isChecked())
         self.assertFalse(win.keep.isChecked())
         self.assertTrue(win.open_when_done.isChecked())
         self.assertEqual(win._current_preset(), "balanced")
@@ -543,6 +543,16 @@ class AppSmokeTest(unittest.TestCase):
         self.assertFalse(hasattr(win.sr_panel, "model"))
         self.assertFalse(hasattr(win.sr_panel, "advanced"))
         self.assertEqual(win.sr_panel.options(1920, 1080)["model"], "auto")
+        win.close()
+
+
+    def test_test_panel_is_separate_card(self):
+        win = self._win()
+        self.assertTrue(hasattr(win, "test_panel"))
+        self.assertFalse(hasattr(win.output_panel, "test_mode"))
+        self.assertIsNot(win.test_panel.parent(), win.output_panel)
+        win.test_panel.test_mode.setChecked(True)
+        self.assertEqual(win.test_panel.clip_seconds(), 3)
         win.close()
 
 

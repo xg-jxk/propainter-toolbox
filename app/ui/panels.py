@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
 from pplib.const import DEFAULT_MAX_OUTPUT_LONG, OUTPUT_LIMITS
 from pplib.options import default_out
 
-from .help import SHORT_HINTS
+from .help import SHORT_HINTS, info_icon
 from .widgets import Collapsible, Field, ModuleCard, SegmentedControl
 
 PRESETS = {
@@ -455,25 +455,6 @@ class OutputPanel(QFrame):
                                ("NVIDIA NVENC", "nvenc"), ("CPU x264", "x264")], "auto")
         outer.addWidget(Field("encoder", "编码器", self.encoder, _hint("encoder")))
 
-        self.test_mode = QCheckBox("只处理一小段")
-        self.test_seconds = _spin(1, 60, 3, " 秒")
-        self.test_seconds.setFixedWidth(78)
-        self.test_start = QDoubleSpinBox()
-        self.test_start.setRange(0.0, 3600.0)
-        self.test_start.setDecimals(1)
-        self.test_start.setSingleStep(0.5)
-        self.test_start.setSuffix(" 秒")
-        self.test_start.setFixedWidth(88)
-        test_box = QWidget()
-        tv = QVBoxLayout(test_box)
-        tv.setContentsMargins(0, 0, 0, 0)
-        tv.setSpacing(6)
-        tv.addWidget(self.test_mode)
-        tv.addWidget(_row(QLabel("时长"), self.test_seconds,
-                          QLabel("起始"), self.test_start,
-                          stretch_first=False))
-        outer.addWidget(Field("test_mode", "测试模式", test_box, _hint("test_mode")))
-
         self.crf = QSpinBox()
         self.crf.setRange(0, 51)
         self.crf.setValue(17)
@@ -483,12 +464,6 @@ class OutputPanel(QFrame):
 
         self.quality.changed.connect(self._on_quality)
         self.crf.valueChanged.connect(self._on_crf_changed)
-        self.test_mode.toggled.connect(self._sync_test)
-        self._sync_test(False)
-
-    def _sync_test(self, on):
-        self.test_seconds.setEnabled(bool(on))
-        self.test_start.setEnabled(bool(on))
 
     def _on_quality(self, value):
         if int(self.crf.value()) != int(value):
@@ -504,12 +479,6 @@ class OutputPanel(QFrame):
             self.quality._current = value
 
     # ---------------------------------------------------------- 取值
-    def clip_seconds(self):
-        return int(self.test_seconds.value()) if self.test_mode.isChecked() else 0
-
-    def clip_start(self):
-        return float(self.test_start.value()) if self.test_mode.isChecked() else 0.0
-
     def out_dir_text(self):
         return self.out_dir.text().strip()
 
@@ -532,3 +501,60 @@ class OutputPanel(QFrame):
 
     def set_preview(self, text):
         self.preview.setText(text)
+
+
+class TestPanel(QFrame):
+    """测试模式：只处理一小段，输出 _预览 文件。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("moduleCard")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(12)
+
+        head = QHBoxLayout()
+        title = QLabel("测试模式")
+        title.setObjectName("cardTitle")
+        head.addWidget(title)
+        head.addWidget(info_icon("test_mode"))
+        head.addStretch(1)
+        outer.addLayout(head)
+
+        self.test_mode = QCheckBox("只处理一小段")
+        self.test_seconds = _spin(1, 60, 3, " 秒")
+        self.test_seconds.setFixedWidth(78)
+        self.test_start = QDoubleSpinBox()
+        self.test_start.setRange(0.0, 3600.0)
+        self.test_start.setDecimals(1)
+        self.test_start.setSingleStep(0.5)
+        self.test_start.setSuffix(" 秒")
+        self.test_start.setFixedWidth(88)
+
+        box = QWidget()
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(8)
+        bv.addWidget(self.test_mode)
+        bv.addWidget(_row(QLabel("时长"), self.test_seconds,
+                          QLabel("起始"), self.test_start,
+                          stretch_first=False))
+        outer.addWidget(box)
+
+        self.hint = QLabel(_hint("test_mode"))
+        self.hint.setObjectName("fieldHint")
+        self.hint.setWordWrap(True)
+        outer.addWidget(self.hint)
+
+        self.test_mode.toggled.connect(self._sync)
+        self._sync(False)
+
+    def _sync(self, on):
+        self.test_seconds.setEnabled(bool(on))
+        self.test_start.setEnabled(bool(on))
+
+    def clip_seconds(self):
+        return int(self.test_seconds.value()) if self.test_mode.isChecked() else 0
+
+    def clip_start(self):
+        return float(self.test_start.value()) if self.test_mode.isChecked() else 0.0
