@@ -48,25 +48,39 @@ _DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 
 # --------------------------------------------------------------- ffmpeg
 
-_VENV_FFMPEG_PATTERNS = [
-    os.path.join(".venv", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
-    os.path.join(".venv", "lib", "python*", "site-packages", "imageio_ffmpeg",
-                 "binaries", "ffmpeg*"),
+#: site-packages 里 imageio-ffmpeg 二进制的相对路径（Windows / POSIX 两种布局）
+_SITE_FFMPEG_PATTERNS = [
+    os.path.join("Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
+    os.path.join("lib", "python*", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg*"),
 ]
 
 
 def _venv_ffmpeg():
-    """直接按路径找 .venv 里 imageio-ffmpeg 自带的二进制。
+    """直接按路径找 imageio-ffmpeg 自带的二进制，不依赖 import。
 
     打包后的 exe 把 imageio_ffmpeg 排除了（83 MB 二进制不值得打进壳），
     在那种进程里 `import imageio_ffmpeg` 会失败 —— 但 venv 里那份 ffmpeg 还在，
     按路径就能拿到。GUI 进程探测分辨率走的就是这条路。
+
+    依次找：项目根的 `.venv` → 当前解释器的 sys.prefix → sys.base_prefix。
+    后两个覆盖「测试跑在别的虚拟环境里」「便携版把运行时装在别处」这类情况，
+    否则在 CI / 全新克隆里会误报"找不到 ffmpeg"。
     """
-    for pat in _VENV_FFMPEG_PATTERNS:
-        hits = sorted(p for p in glob.glob(os.path.join(str(ROOT), pat))
-                      if os.path.isfile(p))
-        if hits:
-            return hits[0]
+    bases = [os.path.join(str(ROOT), ".venv"), sys.prefix, getattr(sys, "base_prefix", sys.prefix)]
+    seen = set()
+    for base in bases:
+        try:
+            key = os.path.normcase(os.path.abspath(str(base)))
+        except Exception:
+            continue
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        for pat in _SITE_FFMPEG_PATTERNS:
+            hits = sorted(p for p in glob.glob(os.path.join(key, pat))
+                          if os.path.isfile(p))
+            if hits:
+                return hits[0]
     return ""
 
 
