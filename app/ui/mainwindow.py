@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """主窗口：左边队列、右边设置（区域修复 / 超分 / 输出），底部进度与日志。"""
+import html
 import os
 import time
 
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
                                QToolButton, QVBoxLayout, QWidget)
 
 from pplib import __version__
+from pplib import logfmt
 from pplib.ffmpeg import ROOT
 from pplib.options import default_out
 from pplib.scaling import target_tag
@@ -817,7 +819,8 @@ class MainWindow(QMainWindow):
         cfgmod.save(self.cfg)
         if not self.log_box.is_expanded():
             self.log_box.set_expanded(True)
-        self.append_log("===== 开始处理 %d 个文件（%s）=====" % (len(self.queue), self._mode()))
+        self.append_log(logfmt.queue_line("开始处理 %d 个文件（%s）" % (len(self.queue), self._mode())),
+                        color=logfmt.COLOR_QUEUE, bold=True)
         self._log_target_summary()
         self.set_running(True)
         self._start_next()
@@ -921,9 +924,25 @@ class MainWindow(QMainWindow):
         self.table.selectRow(idx)
         self.progress.setValue(0)
         self.status_label.setText("准备：%s" % item.name)
+        self._log_item_header(idx, item)
         self.append_log("→ %s" % item.path)
         self.status_label.setText("正在启动运行时…")
         self.runner.start(self._build_spec(item.path, item.width, item.height))
+
+    def _log_item_header(self, idx, item):
+        """单条视频开始：一条青色分隔 + 一行灰字（源→目标、档位、测试模式）。"""
+        self.append_log(
+            logfmt.start_line(idx + 1, len(self.queue), item.name),
+            color=logfmt.COLOR_START, bold=True)
+        plan = self.sr_panel.plan(item.width, item.height)
+        dst_w, dst_h = (plan["final"] if self._mode() != "repair" else (0, 0))
+        preset = self._current_preset()
+        meta = logfmt.meta_line(
+            item.width, item.height, dst_w, dst_h,
+            preset=PRESETS[preset]["title"] if preset in PRESETS else "自定义",
+            preview=self.test_panel.test_mode.isChecked())
+        if meta:
+            self.append_log(meta, color=logfmt.COLOR_META)
 
     def _on_runner_started(self):
         self.status_label.setText("运行时已启动，等待输出…")
@@ -965,8 +984,9 @@ class MainWindow(QMainWindow):
             item.message = "跳过：%s" % (reason or "无")
             item.pct = 100
             item.elapsed = float(payload.get("elapsed") or 0)
-            self.append_log("⚠ 跳过：%s —— %s" % (item.name, item.message))
+            self.append_log("   原因：%s" % (reason or "无"))
             self.append_log("   只做超分请取消勾选「区域修复」；要指定位置用「手动矩形」/「逐帧掩码」")
+            self.append_log(logfmt.end_line("skip", item.name), color=logfmt.COLOR_SKIP)
         elif state == "done":
             preview = bool(payload.get("preview"))
             if preview:
@@ -984,26 +1004,29 @@ class MainWindow(QMainWindow):
             if skipped:
                 self.append_log("⚠ %s 未检测到稳定目标，已跳过区域修复，只做了超分" % item.name)
                 self.append_log("   %s" % reason)
-            self.append_log("✔ %s完成：%s（%s）"
-                            % ("预览" if payload.get("preview") else "",
-                               item.out, self._size_text(payload.get("size"))))
+            detail = ("预览 · " if payload.get("preview") else "") + str(item.out)
+            self.append_log(
+                logfmt.end_line("done", "%s（%s，用时 %.0fs）" % (
+                    detail, self._size_text(payload.get("size")),
+                    float(payload.get("elapsed") or 0) or item.elapsed)),
+                color=logfmt.COLOR_DONE, bold=True)
         elif state == "cancelled":
             item.status = STATUS_CANCELLED
             item.message = "已取消"
             self._cancel_all = True
-            self.append_log("✖ 已取消：%s" % item.name)
+            self.append_log(logfmt.end_line("cancel", item.name), color=logfmt.COLOR_CANCEL)
         else:
             item.status = STATUS_FAILED
             msg = payload.get("msg") or "任务失败（没有返回具体原因）"
             hint = payload.get("hint") or ""
             code = payload.get("code")
             item.message = msg
-            self.append_log("✖ 失败：%s" % item.name)
             self.append_log("   原因：%s" % msg)
             if hint:
                 self.append_log("   建议：%s" % hint)
             if code is not None:
                 self.append_log("   退出码：%s（完整日志见上方）" % code)
+            self.append_log(logfmt.end_line("fail", item.name), color=logfmt.COLOR_FAIL, bold=True)
             self.status_label.setText(msg[:60])
             self.status_label.setStyleSheet("color:#c62828")
             if not self.log_box.is_expanded():
@@ -1034,8 +1057,9 @@ class MainWindow(QMainWindow):
         failed = sum(1 for it in self.queue if it.status in (STATUS_FAILED, STATUS_CANCELLED))
         self.status_label.setText("完成 %d 个，跳过 %d 个，失败/取消 %d 个"
                                   % (done, skipped, failed))
-        self.append_log("===== 队列结束：成功 %d，跳过 %d，失败/取消 %d，总用时 %.0fs ====="
-                        % (done, skipped, failed, time.time() - self._t_start))
+        self.append_log(logfmt.queue_line("队列结束：成功 %d，跳过 %d，失败/取消 %d，总用时 %.0fs"
+                        % (done, skipped, failed, time.time() - self._t_start)),
+                        color=logfmt.COLOR_QUEUE, bold=True)
         if self.open_when_done.isChecked() and done:
             self.open_output()
 
@@ -1061,11 +1085,19 @@ class MainWindow(QMainWindow):
             self._on_modules_changed()
             self._refresh_queue_label()
 
-    def append_log(self, text):
+    def append_log(self, text, color=None, bold=False):
+        """写一条日志。给 color 时界面用彩色，落盘仍然是纯文本。"""
         if not text:
             return
         for line in str(text).splitlines():
-            self.log.appendPlainText(line)
+            if color:
+                esc = html.escape(line)
+                style = "color:%s" % color
+                if bold:
+                    style += ";font-weight:600"
+                self.log.appendHtml('<div style="%s">%s</div>' % (style, esc))
+            else:
+                self.log.appendPlainText(line)
         applog.write(text)
 
     # ================================================================ 其它

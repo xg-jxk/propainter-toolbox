@@ -156,6 +156,27 @@ class AppSmokeTest(unittest.TestCase):
         self.assertEqual(quality_from_crf(22), 23)
         self.assertEqual(quality_from_crf(None), 17)
 
+    def test_log_has_item_separators(self):
+        """每条视频在日志里用分隔线包起来；落盘的文件日志是纯文本（不带 HTML）。"""
+        from app.core import applog
+        win = self._win()
+        win.queue.add_paths([self._tmp_video()])
+        win._rebuild_table()
+        captured = []
+        orig = applog.write
+        applog.write = lambda text: captured.append(str(text))
+        try:
+            win._current = 0
+            win._log_item_header(0, win.queue[0])
+        finally:
+            applog.write = orig
+        text = win.log.toPlainText()
+        self.assertIn("【1/1】", text)
+        self.assertIn("━", text)
+        self.assertTrue(any("━" in c for c in captured))
+        self.assertFalse(any("<div" in c for c in captured), "文件日志不能带 HTML")
+        win.close()
+
     def test_action_areas(self):
         """方案 C：队列操作在表格上方，运行控制在底部状态条，重置参数归设置区。"""
         from PySide6.QtWidgets import QPushButton
@@ -237,9 +258,10 @@ class AppSmokeTest(unittest.TestCase):
         icons = [w for w in win.findChildren(QLabel) if w.objectName() == "infoIcon"]
         self.assertGreaterEqual(len(icons), 11, "i 图标数量不对")
         for ic in icons:
-            self.assertTrue(ic.toolTip(), "有 i 图标没挂 tooltip")
             self.assertTrue(ic.bubble_html, "气泡内容为空")
             self.assertIn("<b", ic.bubble_html)
+            # 不挂原生 tooltip：否则会和自绘气泡同时弹两个
+            self.assertEqual(ic.toolTip(), "", "i 图标不该再挂原生 tooltip")
         win.close()
 
     def test_bubble_shows_on_hover(self):
@@ -290,50 +312,42 @@ class AppSmokeTest(unittest.TestCase):
             fh.write(b"0")
         return p
 
-    def test_native_tooltips_are_unified(self):
-        """任何带 toolTip 的控件，ToolTip 事件都应弹自绘气泡而不是系统 tooltip。"""
-        
+    def test_tooltip_events_are_left_to_qt(self):
+        """回归保护：不再用 eventFilter 拦 ToolTip（那是 0xC0000005 的来源）。
+
+        普通控件（比如档位按钮）的 ToolTip 必须原样交给 Qt 处理，不弹自绘气泡。
+        """
         from PySide6.QtCore import QEvent, QPoint
         from PySide6.QtGui import QHelpEvent
         from app.ui import bubble
 
         win = self._win()
-        bubble.watch_tree(win)
+        bubble.watch_tree(win)                  # 空实现，装不上任何过滤器
+        self.assertFalse(hasattr(bubble, "_TooltipFilter"),
+                         "事件过滤器实现应已删除（0xC0000005 的来源）")
+        self.assertFalse(hasattr(bubble, "_ensure_filter"))
         bubble.hide_bubble()
         btn = win._preset_buttons["fast"]
         self.assertTrue(btn.toolTip())
         ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), QPoint(200, 200))
-        handled = self.app.notify(btn, ev)
-        self.assertTrue(handled, "ToolTip 事件没有被拦截")
-        self.assertTrue(bubble.bubble().isVisible(), "没有弹出自绘气泡")
-        self.assertIn("上下文", bubble.bubble().text() + "上下文")
-        bubble.hide_bubble()
-        self.assertFalse(bubble.bubble().isVisible())
+        self.app.notify(btn, ev)                # 交给 Qt 的原生 tooltip
+        self.assertFalse(bubble.bubble().isVisible(), "普通控件不该弹自绘气泡")
         win.close()
-    def test_tooltip_no_flicker_on_repeat(self):
-        """鼠标移动时 Qt 会重复发 ToolTip 事件，不能让气泡反复 show/hide。"""
-        from PySide6.QtCore import QEvent, QPoint
-        from PySide6.QtGui import QHelpEvent
+
+    def test_help_icon_bubble_lifecycle(self):
+        """「i」图标仍然靠 enter/leave 弹收气泡（不依赖 QEvent 拦截）。"""
+        from PySide6.QtWidgets import QLabel
         from app.ui import bubble
 
         win = self._win()
-        bubble.watch_tree(win)
+        icon = [w for w in win.findChildren(QLabel) if w.objectName() == "infoIcon"][0]
         bubble.hide_bubble()
-        btn = win._preset_buttons["balanced"]
-        ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), QPoint(300, 300))
-        self.app.notify(btn, ev)
+        bubble.show_bubble(icon, icon.bubble_html)
         self.assertTrue(bubble.bubble().isVisible())
-        text = bubble.bubble().text()
-        # 连发三次，气泡应保持可见且内容不变
-        for _ in range(3):
-            self.app.notify(btn, ev)
-            self.assertTrue(bubble.bubble().isVisible(), "重复事件把气泡关掉了")
-        self.assertEqual(bubble.bubble().text(), text)
-        # 宽限期内收到 Leave 不应立刻隐藏
-        self.app.notify(btn, QEvent(QEvent.Type.Leave))
-        self.assertTrue(bubble.bubble().isVisible(), "Leave 后立刻隐藏了（会闪）")
         bubble.hide_bubble()
+        self.assertFalse(bubble.bubble().isVisible())
         win.close()
+
     def test_bridge_decodes_bytearray(self):
         """readAllStandardOutput() 返回 QByteArray，曾经被当成文件对象调用 .readAll()。"""
         from PySide6.QtCore import QByteArray

@@ -17,7 +17,7 @@
 
 > **下载**：
 > - GitHub：<https://github.com/xg-jxk/propainter-toolbox/releases/latest>
-> - Gitee 镜像：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.30>
+> - Gitee 镜像：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.31>
 >
 > 便携包 `ProPainterToolbox-<版本>-portable.zip`，约 49 MB；解压即用，首次启动会引导安装运行时。
 
@@ -92,7 +92,7 @@ ProPainterToolbox\
 
 ### 1.6 版本与许可
 
-- 当前版本：**v1.3.30**
+- 当前版本：**v1.3.31**
 - 技术栈：Python 3.11 + PyTorch 2.5.1 (CUDA 12.1) + PySide6 6.9 + ffmpeg（imageio-ffmpeg 自带）
 - 许可（哪份文件管哪些内容）：
 
@@ -123,8 +123,8 @@ ProPainterToolbox\
 
 1. 直接打开最新版页面：<https://github.com/xg-jxk/propainter-toolbox/releases/latest>
    （从仓库首页进的话：右侧栏的 **Releases** 区块 → 最新版本；它**不在**顶部 `Code / Issues` 那一排）
-2. 在 **Assets** 里下载 **`ProPainterToolbox-1.3.30-portable.zip`**（约 **49 MB**）
-3. Gitee 镜像（**同一份文件**）：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.30>
+2. 在 **Assets** 里下载 **`ProPainterToolbox-1.3.31-portable.zip`**（约 **49 MB**）
+3. Gitee 镜像（**同一份文件**）：<https://gitee.com/jiang-xinkai/propainter-toolbox/releases/tag/v1.3.31>
    国内下载 GitHub 慢时用它，附件名与校验值都一致
 
 > 包很小是因为它只是“界面外壳”：PyTorch、模型权重、超分工具都在第一次运行时按需下载。
@@ -226,7 +226,7 @@ ProPainterToolbox\
 | 待处理队列 | 文件 / 状态 / 进度 / 用时 / 输出尺寸 / 输出 |
 | 右侧设置 | 档位（快速 / 平衡 / 精修）+ **重置参数** +「区域修复」「超分」两张开关卡片 + 共用「输出」卡片 +「测试模式」；每个参数旁的 **i** 悬停可看说明。界面只留 8 个真正需要人决定的参数，分段/掩码膨胀/阈值等由程序和档位自动定 |
 | 底部状态条 | **开始处理**（主按钮）/ 取消 + 进度条（百分比画在条内）+ 状态文字 + 清理缓存 |
-| 日志区 | 实时日志（等同命令行输出） |
+| 日志区 | 实时日志（等同命令行输出）；每条视频用 `━━ 【2/5】文件名 ━━` 分隔，成功/跳过/失败分色，`app.log` 里是纯文本分隔 |
 | 【使用条款】 | 随时重看条款 |
 | 【环境信息】 | torch 版本、CUDA 是否可用、NVENC、权重是否齐全 |
 
@@ -284,17 +284,17 @@ ProPainterToolbox\
 ### 2.5 开发者：测试与打包
 
 ```powershell
-# 单测（90 项，纯 CPU，不需要显卡）
+# 单测（101 项，纯 CPU，不需要显卡）
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
 # 打包 GUI 外壳 + 便携 zip
 powershell -NoProfile -ExecutionPolicy Bypass -File build\make.ps1 -Zip
 # 产物：dist\ProPainterToolbox\ProPainterToolbox.exe
-#       dist\ProPainterToolbox-1.3.30-portable.zip
+#       dist\ProPainterToolbox-1.3.31-portable.zip
 
 # 再打安装包（需装 Inno Setup）
 ISCC.exe build\installer.iss
-# 产物：build\out\ProPainterToolbox-Setup-1.3.30.exe
+# 产物：build\out\ProPainterToolbox-Setup-1.3.31.exe
 ```
 
 > 推 `v*` 标签会自动触发 GitHub Actions（`.github/workflows/release.yml`）完成打包并发布 Release，

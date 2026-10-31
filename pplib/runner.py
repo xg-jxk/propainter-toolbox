@@ -12,9 +12,30 @@ import json
 import os
 import sys
 
+from . import logfmt
 from .events import (Cancelled, Emitter, JobError, file_sink, human_sink,
                      jsonl_sink, tee_sink)
 from .job import parse_spec, run_job
+
+
+def _print_banner(spec, args):
+    """命令行单任务的开头两行：分隔 + 源/目标信息。"""
+    name = os.path.basename(spec.video)
+    print(logfmt.bar("开始：%s" % name))
+    try:
+        from .ffmpeg import probe_size
+        from .scaling import plan_scale
+        w, h = probe_size(spec.video)
+        target = int(getattr(spec.sr, "target_long", 0) or 0)
+        if w and h and target:
+            plan = plan_scale(w, h, target,
+                              int(getattr(spec.sr, "max_output_long", 0) or 0))
+            print(logfmt.meta_line(w, h, *plan["final"],
+                                   preview=bool(getattr(spec, "clip_seconds", 0))))
+        elif w and h:
+            print(logfmt.meta_line(w, h))
+    except Exception:
+        pass
 
 
 def main(argv=None):
@@ -53,8 +74,11 @@ def main(argv=None):
                 spec,
                 clip_seconds=float(args.clip if args.clip is not None else spec.clip_seconds),
                 clip_start=float(args.clip_start if args.clip_start is not None else spec.clip_start))
+        if not args.jsonl:            # CLI 才加分隔（GUI 自己画带颜色的）
+            _print_banner(spec, args)
         result = run_job(spec, emit)
         if not args.jsonl:
+            print(logfmt.bar())
             print("结果：%s" % (result or {}))
         return 0
     except Cancelled:

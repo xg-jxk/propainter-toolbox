@@ -183,6 +183,16 @@ QPlainTextEdit {
     padding: 8px;
 }
 
+/* 参数旁的「i」用自绘气泡；其它控件统一走原生 tooltip，样式在这里 */
+QToolTip {
+    background: #1b2433;
+    color: #dbe4f3;
+    border: 1px solid #2b3a52;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 12px;
+}
+
 QCheckBox {
     spacing: 6px;
 }
