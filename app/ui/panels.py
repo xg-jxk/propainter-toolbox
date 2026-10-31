@@ -184,24 +184,22 @@ class RepairPanel(ModuleCard):
         self.padding.valueChanged.connect(
             lambda v: self.padding_slider.setValue(int(round(v * 100))))
 
-        self.advanced = Collapsible("高级参数")
         self.subvideo = _spin(10, 200, 40, " 帧")
-        self.advanced.add_field(Field("subvideo", "分段 subvideo", self.subvideo,
-                                      _hint("subvideo")))
+        self.add_field(Field("subvideo", "分段 subvideo", self.subvideo,
+                             _hint("subvideo")))
         self.mask_dilation = _spin(0, 20, 2, " px")
-        self.advanced.add_field(Field("mask_dilation", "掩码膨胀", self.mask_dilation,
-                                      _hint("mask_dilation")))
+        self.add_field(Field("mask_dilation", "掩码膨胀", self.mask_dilation,
+                             _hint("mask_dilation")))
         self.detect_thr = QDoubleSpinBox()
         self.detect_thr.setRange(0.30, 0.95)
         self.detect_thr.setSingleStep(0.01)
         self.detect_thr.setDecimals(2)
         self.detect_thr.setValue(0.62)
-        self.advanced.add_field(Field("detect_thr", "匹配阈值", self.detect_thr,
-                                      _hint("detect_thr")))
+        self.add_field(Field("detect_thr", "匹配阈值", self.detect_thr,
+                             _hint("detect_thr")))
         self.ref_stride = _spin(1, 30, 12)
-        self.advanced.add_field(Field("ref_stride", "参考帧步长", self.ref_stride,
-                                      _hint("ref_stride")))
-        self.vbox.addWidget(self.advanced)
+        self.add_field(Field("ref_stride", "参考帧步长", self.ref_stride,
+                             _hint("ref_stride")))
         self.vbox.addStretch(1)
 
         self.detect.currentIndexChanged.connect(self._on_detect_changed)
@@ -476,13 +474,11 @@ class OutputPanel(QFrame):
                           stretch_first=False))
         outer.addWidget(Field("test_mode", "测试模式", test_box, _hint("test_mode")))
 
-        self.advanced = Collapsible("高级参数")
         self.crf = QSpinBox()
         self.crf.setRange(0, 51)
         self.crf.setValue(17)
-        self.advanced.add_field(Field(None, "crf 数值", self.crf,
-                                      "0 最清晰、51 最糊，常用 17~23"))
-        outer.addWidget(self.advanced)
+        outer.addWidget(Field("crf", "精确 crf", self.crf,
+                              "0 最清晰、51 最糊，常用 17~23"))
         outer.addStretch(1)
 
         self.quality.changed.connect(self._on_quality)

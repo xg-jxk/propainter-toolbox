@@ -33,13 +33,12 @@ DEFAULTS = {
     "keep": False,
     "open_when_done": True,
     "preset": "balanced",
-    "advanced_open": False,
     "log_open": False,
     "mode": "repair",            # 旧版字段，仅用于迁移
     "workdir": "",
     "last_dir": "",
     "terms_version": 0,
-    "window": {"w": 1360, "h": 860},
+    "window": {"w": 1440, "h": 900},
 }
 
 

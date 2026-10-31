@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("ProPainter 工具箱 v%s" % __version__)
         win_cfg = self.cfg.get("window", {})
-        self.resize(int(win_cfg.get("w", 1400)), int(win_cfg.get("h", 880)))
+        self.resize(int(win_cfg.get("w", 1440)), int(win_cfg.get("h", 900)))
         self.setMinimumSize(900, 640)
 
         self._build_ui()
@@ -383,7 +383,7 @@ class MainWindow(QMainWindow):
             width = self._right_scroll.viewport().width()
         except Exception:
             return
-        if width >= 880:
+        if width >= 800:
             columns = 3
         elif width >= 620:
             columns = 2
@@ -438,7 +438,6 @@ class MainWindow(QMainWindow):
         if preset in self._preset_buttons:
             self._preset_buttons[preset].setChecked(True)
             self.preset_hint.setText(PRESETS[preset]["desc"])
-        self.repair_panel.advanced.set_expanded(bool(c.get("advanced_open", False)))
         self.log_box.set_expanded(bool(c.get("log_open", False)))
 
     def _collect_config(self):
@@ -469,7 +468,6 @@ class MainWindow(QMainWindow):
             "keep": self.keep.isChecked(),
             "open_when_done": self.open_when_done.isChecked(),
             "preset": self._current_preset(),
-            "advanced_open": self.repair_panel.advanced.is_expanded(),
             "log_open": self.log_box.is_expanded(),
             "last_dir": self.cfg.get("last_dir", ""),
             "window": {"w": self.width(), "h": self.height()},

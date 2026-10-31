@@ -128,10 +128,12 @@ class AppSmokeTest(unittest.TestCase):
         win.close()
 
     # ------------------------------------------------------------ 折叠
-    def test_advanced_collapsed_by_default(self):
+    def test_no_collapsed_advanced_sections(self):
+        """高级参数已取消：两张卡片都不再有 advanced 折叠区。"""
         win = self._win()
-        self.assertFalse(win.repair_panel.advanced.is_expanded())
-        self.assertFalse(win.advanced_visible() if hasattr(win, "advanced_visible") else False)
+        self.assertFalse(hasattr(win.repair_panel, "advanced"))
+        self.assertFalse(hasattr(win.output_panel, "advanced"))
+        self.assertFalse(hasattr(win.sr_panel, "advanced"))
         win.close()
 
     # ------------------------------------------------------------ 说明图标
