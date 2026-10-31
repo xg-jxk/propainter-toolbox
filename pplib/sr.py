@@ -42,15 +42,9 @@ def clamp_scale(width, height, scale, limit=DEFAULT_MAX_OUTPUT_LONG):
     long_side = max(int(width or 0), int(height or 0))
     if long_side <= 0:
         return int(scale), False
-    if long_side > limit:
+    # 硬门槛：会超限就直接拒绝（返回 0），不再降档
+    if long_side * int(scale) > limit:
         return 0, True
-    allowed = 4
-    while allowed > 1 and long_side * allowed > limit:
-        allowed -= 1
-    if allowed < 2:
-        return 0, True
-    if int(scale) > allowed:
-        return allowed, True
     return int(scale), False
 
 
@@ -59,6 +53,14 @@ def run_sr(video, opts, emit, out=None, final=True):
     if not os.path.isfile(video):
         raise JobError("找不到视频：%s" % video)
     opts.validate()
+    if getattr(opts, "skip_reason", None):
+        reason = str(opts.skip_reason)
+        emit.log("跳过超分：%s" % reason)
+        result = {"skipped": True, "reason": reason, "out": None}
+        if final:
+            emit.done(out=None, size=None, elapsed=0.0,
+                      extra={"skipped": "sr", "reason": reason})
+        return result
     check_cugan()
 
     model_root = str(CUGAN_DIR)
@@ -97,13 +99,17 @@ def run_sr(video, opts, emit, out=None, final=True):
         # 8K 上限：即使 CLI 传了过大的倍率，也不能放出超 8K 的输出
         long_side = max(w, h)
         cap = int(getattr(opts, "max_output_long", DEFAULT_MAX_OUTPUT_LONG) or 0)
-        scale_use, capped = clamp_scale(w, h, opts.scale, cap)
+        scale_use, blocked = clamp_scale(w, h, opts.scale, cap)
         if scale_use <= 0:
-            raise JobError("源长边 %d 已超过所选输出上限" % long_side,
-                           "把「输出上限」调大，或取消勾选「超分」")
-        if capped:
-            emit.log("为不超过输出上限（长边 %d），倍率从 %dx 降到 %dx"
-                     % (cap, opts.scale, scale_use))
+            reason = ("按 %dx 放大后长边会到 %d，超过输出上限 %d"
+                      % (opts.scale, long_side * int(opts.scale), cap)
+                      if cap else "无法按 %dx 放大" % opts.scale)
+            emit.log("跳过超分：%s" % reason)
+            result = {"skipped": True, "reason": reason, "out": None}
+            if final:
+                emit.done(out=None, size=None, elapsed=0.0,
+                          extra={"skipped": "sr", "reason": reason})
+            return result
 
         denoise = opts.denoise
         if denoise is None:

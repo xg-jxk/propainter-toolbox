@@ -60,7 +60,16 @@ def limit_label(limit):
 
 
 def pick_scale(src_w, src_h, target_long, limit=DEFAULT_MAX_OUTPUT_LONG):
-    """按长边算倍率，并受输出上限约束。返回 (scale, status)。"""
+    """按长边算倍率，受输出上限硬约束。返回 (scale, status)。
+
+    status:
+      unknown     还没选视频
+      too_big     源本身已到/超过上限 → 本次跳过超分
+      unavailable 目标需要超过上限的倍率 → 该档不可选（不再降档）
+      unreachable 源已经超过目标
+      ok / up     正好命中 / 整数倍导致超出目标
+      max / max_limited  最高档（前者能用 4x，后者被上限截住）
+    """
     if not (src_w and src_h):
         return 2, "unknown"
     long_side = max(int(src_w), int(src_h))
@@ -79,8 +88,7 @@ def pick_scale(src_w, src_h, target_long, limit=DEFAULT_MAX_OUTPUT_LONG):
     for s in allowed:
         if long_side * s >= target_long - 0.5:
             return s, ("ok" if abs(long_side * s - target_long) <= 1 else "up")
-    s = max(allowed)
-    return s, ("capped" if s == 4 else "capped_limit")
+    return 0, "unavailable"
 
 
 def _k_label(width, height):
@@ -330,14 +338,18 @@ class SRPanel(ModuleCard):
         if not (self._src_w and self._src_h):
             return label if target_long else "最高 · 按源自适应"
         limit = self.cap_limit()
+        cap_name = limit_label(limit) if limit else "不限制"
         scale, status = pick_scale(self._src_w, self._src_h, target_long, limit)
         if status == "too_big":
-            return "%s · 源超上限" % label
+            return "%s · 源已超 %s 上限" % (label, cap_name)
+        if status == "unavailable":
+            need = float(target_long) / max(self._src_w, self._src_h)
+            return "%s · 需 %.1fx，超 %s 上限" % (label, need, cap_name)
         if status == "unreachable":
             return "%s · 源已超" % label
         ow, oh = self._src_w * scale, self._src_h * scale
         text = "%s · %dx · %d×%d" % (label, scale, ow, oh)
-        if status in ("capped", "capped_limit"):
+        if status == "max_limited":
             text = "⚠ " + text
         return text
 
@@ -349,7 +361,7 @@ class SRPanel(ModuleCard):
         limit = self.cap_limit()
         for key, _label, target_long in TARGETS:
             _, status = pick_scale(self._src_w, self._src_h, target_long, limit)
-            enabled = status not in ("unreachable", "too_big")
+            enabled = status not in ("unreachable", "too_big", "unavailable")
             self.target.addItem(self._item_text(key, target_long), (key, target_long))
             item = self.target.model().item(self.target.count() - 1)
             if item is not None:
@@ -372,26 +384,29 @@ class SRPanel(ModuleCard):
             self.scale_hint.setText("加入视频后按源长边自动换算倍率")
             return
         limit = self.cap_limit()
+        cap_name = limit_label(limit) if limit else "不限制"
         key = self.target_key()
         scale, status = pick_scale(self._src_w, self._src_h, self.target_long(), limit)
+        long_side = max(self._src_w, self._src_h)
         if status == "too_big":
             self.scale_hint.setText(
-                "源长边 %d 已超过「%s」上限，无法再放大" % (
-                    max(self._src_w, self._src_h), limit_label(limit)))
+                "源长边 %d 已达到「%s」上限，本次会跳过超分" % (long_side, cap_name))
+            return
+        if status == "unavailable":
+            need = float(self.target_long()) / long_side
+            self.scale_hint.setText(
+                "目标 %s 需要 %.1fx，会超过「%s」上限，这一档不可选"
+                % (target_label(key), need, cap_name))
             return
         ow, oh = self._src_w * scale, self._src_h * scale
         txt = "源 %d×%d → %s 用 %dx · %d×%d（%s）" % (
             self._src_w, self._src_h, target_label(key), scale, ow, oh, _k_label(ow, oh))
         if status == "up":
-            txt += " · 该源无法精确命中，取上一档"
-        elif status == "capped":
-            txt += " · 4x 已是模型上限，达不到 %s" % target_label(key)
-        elif status == "capped_limit":
-            txt += " · 再放大就超「%s」上限，已截住" % limit_label(limit)
-        elif status == "max_limited":
-            txt += " · 4x 会超「%s」上限，最高只到 %dx" % (limit_label(limit), scale)
+            txt += " · 无法精确命中，取上一档"
         elif status == "max":
-            txt += " · 模型支持的最高倍率"
+            txt += " · 上限内最大倍率"
+        elif status == "max_limited":
+            txt += " · 4x 会超「%s」上限，最高只到 %dx" % (cap_name, scale)
         if max(ow, oh) > 4096:
             txt += " · 超 4096，自动用 CPU 编码"
         self.scale_hint.setText(txt)
@@ -402,11 +417,16 @@ class SRPanel(ModuleCard):
         h = self._src_h if src_h is None else int(src_h or 0)
         limit = self.cap_limit()
         scale, status = pick_scale(w, h, self.target_long(), limit)
+        skip = ""
         if status == "too_big":
-            scale = 0
+            scale = 2
+            skip = "源长边 %d 已达到输出上限 %s，跳过超分" % (
+                max(int(w or 0), int(h or 0)),
+                limit_label(limit) if limit else "不限制")
         denoise = self.denoise.currentData()
         return {
-            "scale": int(scale or 0),
+            "scale": int(scale or 2),
+            "skip_reason": skip,
             "max_output_long": limit,
             "denoise": None if denoise == "auto" else int(denoise),
             "model": "auto",

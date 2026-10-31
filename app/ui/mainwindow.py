@@ -707,8 +707,6 @@ class MainWindow(QMainWindow):
             raise ValueError("至少启用区域修复或超分")
         repair = self.repair_panel.options()
         sr = self.sr_panel.options(width, height)
-        if self.sr_panel.is_enabled() and not sr.get("scale"):
-            raise ValueError("源分辨率超过了所选输出上限，请调大上限或取消超分")
         repair["crf"] = self.output_panel.crf_value()
         repair["encoder"] = self.output_panel.encoder_value()
         repair["keep"] = self.keep.isChecked()
@@ -755,15 +753,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "找不到掩码", "请选择掩码文件或目录")
             return
         if self.sr_panel.is_enabled():
-            bad = [it.name for it in self.queue
-                   if not self.sr_panel.options(it.width, it.height)["scale"]]
-            if bad:
-                QMessageBox.warning(
-                    self, "超过输出上限",
-                    "以下视频放大后会超过「%s」上限：\n\n%s\n\n"
-                    "把「高级 → 输出上限」调大，或取消勾选「超分」。"
-                    % (self.sr_panel.cap.currentText(), "\n".join(bad[:8])))
-                return
+            skipped = [it.name for it in self.queue
+                       if self.sr_panel.options(it.width, it.height).get("skip_reason")]
+            if skipped:
+                self.append_log("⚠ %d 个视频的源分辨率已达到输出上限，超分将被跳过：%s"
+                                % (len(skipped), "、".join(skipped[:3])))
 
         self.queue.reset()
         self._rebuild_table()
@@ -912,9 +906,9 @@ class MainWindow(QMainWindow):
         skipped = payload.get("skipped")
         reason = payload.get("reason") or ""
         if state == "done" and skipped and not payload.get("out"):
-            # 一条龙里只勾了修复、又没检测到目标：跳过，不算失败
+            # 没有产出：跳过，不算失败（无目标 / 超分被上限挡住）
             item.status = STATUS_SKIPPED
-            item.message = "未检测到目标：%s" % (reason or "无")
+            item.message = "跳过：%s" % (reason or "无")
             item.pct = 100
             item.elapsed = float(payload.get("elapsed") or 0)
             self.append_log("⚠ 跳过：%s —— %s" % (item.name, item.message))
@@ -923,8 +917,12 @@ class MainWindow(QMainWindow):
             preview = bool(payload.get("preview"))
             if preview:
                 item.status = "完成（预览）"
+            elif skipped == "sr":
+                item.status = "完成（跳超分）"
+            elif skipped:
+                item.status = "完成（跳修复）"
             else:
-                item.status = "完成（跳修复）" if skipped else STATUS_DONE
+                item.status = STATUS_DONE
             item.out = payload.get("out") or ""
             item.pct = 100
             item.elapsed = float(payload.get("elapsed") or 0)

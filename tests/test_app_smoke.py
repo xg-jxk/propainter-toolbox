@@ -394,7 +394,7 @@ class AppSmokeTest(unittest.TestCase):
         texts = [win.sr_panel.target.itemText(i) for i in range(win.sr_panel.target.count())]
         self.assertIn("2560×1440", texts[1])
         self.assertIn("3840×2160", texts[2])
-        self.assertIn("⚠", texts[3])          # 被上限截住的档位加警示
+        self.assertIn("需 6.0x", texts[3])          # 被上限截住的档位加警示
         self.assertFalse(win.sr_panel.target.model().item(0).isEnabled())
         win.sr_panel.set_target("4K")
         self.assertEqual(win.sr_panel.options(1280, 720)["scale"], 3)
@@ -419,12 +419,14 @@ class AppSmokeTest(unittest.TestCase):
         # 改成 4K 上限：1080p 源最高只能 2x，4K 源直接不可用
         self.assertEqual(pick_scale(1920, 1080, 0, 3840), (2, "max_limited"))
         self.assertEqual(pick_scale(3840, 2160, 0, 3840), (0, "too_big"))
+        # 目标需要超过上限的倍率 → 不可选，不降档
+        self.assertEqual(pick_scale(1920, 1080, 7680, 3840), (0, "unavailable"))
         # 不限制：4K 源也能 4x
         self.assertEqual(pick_scale(3840, 2160, 0, 0), (4, "max"))
         self.assertEqual(pick_scale(1920, 1080, 0, 0), (4, "max"))
 
         # 后端兜底
-        self.assertEqual(clamp_scale(3840, 2160, 4), (2, True))
+        self.assertEqual(clamp_scale(3840, 2160, 4), (0, True))
         self.assertEqual(clamp_scale(1920, 1080, 4), (4, False))
         self.assertEqual(clamp_scale(1280, 720, 4), (4, False))
         self.assertEqual(clamp_scale(7680, 4320, 2), (0, True))
@@ -455,12 +457,13 @@ class AppSmokeTest(unittest.TestCase):
         win.sr_panel.set_enabled_state(True)
         win.sr_panel.set_cap(3840)
         win.sr_panel.set_target("max")
-        self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 0)
-        with self.assertRaises(ValueError):
-            win._build_spec(r"D:\a.mp4", 3840, 2160)
+        opts = win.sr_panel.options(3840, 2160)
+        self.assertTrue(opts["skip_reason"], "源超上限时应标记跳过超分")
+        self.assertEqual(opts["scale"], 2)
+        self.assertEqual(win._build_spec(r"D:\a.mp4", 3840, 2160)["sr"]["scale"], 2)
         win.sr_panel.set_cap(0)          # 不限制
         self.assertEqual(win.sr_panel.options(3840, 2160)["scale"], 4)
-        self.assertEqual(win._build_spec(r"D:\a.mp4", 3840, 2160)["sr"]["scale"], 4)
+        self.assertFalse(win.sr_panel.options(3840, 2160)["skip_reason"])
         win.close()
 
     def test_missing_size_is_probed_before_start(self):

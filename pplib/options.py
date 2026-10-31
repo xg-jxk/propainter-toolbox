@@ -87,6 +87,7 @@ class SROptions:
     denoise: Optional[int] = None       # None = 按分辨率自动
     model: str = "models-pro"
     max_output_long: int = 7680      # 0 = 不限制
+    skip_reason: Optional[str] = None    # 非空 = 本次跳过超分
     crf: int = 17
     encoder: str = "auto"
     preset: Optional[str] = None
@@ -101,6 +102,7 @@ class SROptions:
             denoise=(None if den in (None, "") else int(den)),
             model=str(_get(d, "model", "auto")),
             max_output_long=int(_get(d, "max_output_long", 7680)),
+            skip_reason=_get(d, "skip_reason", None),
             crf=int(_get(d, "crf", 17)),
             encoder=str(_get(d, "encoder", "auto")),
             preset=_get(d, "preset", None),

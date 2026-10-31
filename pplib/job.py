@@ -153,6 +153,28 @@ def _run_pipeline(spec, emit, final=True):
         else:
             out = default_out(spec.video, "pipeline", spec.sr.scale)
         res = run_sr(src, spec.sr, ScaledEmitter(emit, 46.0, 98.0), out=out, final=False)
+        if (res or {}).get("skipped"):
+            # 超分被跳过：交付修复版（没做修复的话就没产出）
+            reason = (res or {}).get("reason") or "超分被跳过"
+            if skipped:
+                emit.log("⚠ 超分已跳过：%s" % reason)
+                emit.done(out=None, size=None, elapsed=time.time() - t0,
+                          extra={"frames": rep.get("frames"), "skipped": "both",
+                                 "reason": reason})
+                return {"skipped": True, "reason": reason, "out": None}
+            final_out = spec.out or default_out(spec.video, "repair")
+            try:
+                shutil.copyfile(clean, final_out)
+            except OSError as e:
+                raise JobError("超分跳过，但修复版无法落盘：%s" % e)
+            size = os.path.getsize(final_out) if os.path.isfile(final_out) else None
+            emit.log("⚠ 超分已跳过：%s；已交付修复版 %s" % (reason, final_out))
+            emit.total_pct(100)
+            emit.done(out=final_out, size=size, elapsed=time.time() - t0,
+                      extra={"frames": rep.get("frames"), "mode": "pipeline",
+                             "skipped": "sr", "reason": reason})
+            return {"out": final_out, "size": size, "elapsed": time.time() - t0,
+                    "skipped": True, "reason": reason}
         emit.total_pct(100)
         size = os.path.getsize(out) if os.path.isfile(out) else None
         extra = {"frames": res.get("frames"), "mode": "pipeline"}
